@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"fast-blocks/blockchain/model"
+	"fast-blocks/blockchain/script"
 	"fast-blocks/util"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/lbryio/lbry.go/v2/extras/errors"
@@ -18,6 +19,7 @@ type Blocks interface {
 }
 
 type blockStream struct {
+	lastBlockHash  string
 	fileNr         int
 	blockNr        int
 	startingHeight int
@@ -57,12 +59,17 @@ func (bs *blockStream) NextBlock() (*model.Block, error) {
 	return block, nil
 }
 
+var magicNumberConst = []byte{250, 228, 170, 241}
+
 func (bs *blockStream) setBlockInfo(block *model.Block) error {
-	magicNumber, err := bs.readBytes(4)
+	if block.Height == 3992 {
+		println("problematic block")
+	}
+	magicNumber, err := bs.readMagicNumber()
 	if err != nil {
 		return errors.Err(err)
 	}
-	blockSize, err := bs.readUint32()
+	blockSize, _, err := bs.readUint32()
 	if err != nil {
 		return errors.Err(err)
 	}
@@ -78,9 +85,6 @@ func (bs *blockStream) setBlockInfo(block *model.Block) error {
 
 	block.BlockHash = chainhash.DoubleHashH(header).String()
 	block.Version = binary.LittleEndian.Uint32(header[0:4])
-	if block.Version > 1 {
-		//panic("Block file reading is toast! Version should always be less than 1")
-	}
 	block.PrevBlockHash = hex.EncodeToString(util.ReverseBytes(header[4:36]))
 	block.MerkleRoot = hex.EncodeToString(header[36:68])
 	block.ClaimTrieRoot = hex.EncodeToString(header[68:100])
@@ -88,11 +92,23 @@ func (bs *blockStream) setBlockInfo(block *model.Block) error {
 	block.Bits = binary.LittleEndian.Uint32(header[104:108])
 	block.Nonce = binary.LittleEndian.Uint32(header[108:112])
 
-	txCnt, err := bs.readCompactSize()
+	txCnt, _, err := bs.readCompactSize()
 	if err != nil {
 		return errors.Err(err)
 	}
 	block.TxCnt = int(txCnt)
+
+	// VALIDATION
+
+	for i, _ := range magicNumber {
+		if magicNumberConst[i] != magicNumber[i] {
+			println("failed to get constant magic number")
+		}
+	}
+
+	if block.Version > 1 && block.Version != 536870912 && block.Version != 536870913 {
+		panic("Block file reading is toast! Version should always be 1 or 536870912,536870913")
+	}
 
 	return nil
 }
@@ -125,81 +141,112 @@ func (bs *blockStream) Read(p []byte) (n int, err error) {
 	return read, errors.Err(err)
 }
 
-func (bs *blockStream) readCompactSize() (uint64, error) {
+func (bs *blockStream) readCompactSize() (uint64, []byte, error) {
+	var readBuf []byte
 	bSize := make([]byte, 1)
 	_, err := bs.Read(bSize)
 	if err != nil {
-		return 0, errors.Err(err)
+		return 0, nil, errors.Err(err)
 	}
+	readBuf = append(readBuf, bSize...)
+
 	size := uint64(bSize[0])
 	if size < 253 {
-		return size, nil
+		return size, readBuf, nil
 	}
 
 	if size == 253 {
 		buf := make([]byte, 2)
-		bs.Read(buf)
-		return uint64(binary.LittleEndian.Uint16(buf)), nil
+		_, err := bs.Read(buf)
+		if err != nil {
+			return 0, nil, errors.Err(err)
+		}
+		readBuf = append(readBuf, buf...)
+
+		return uint64(binary.LittleEndian.Uint16(buf)), readBuf, nil
 	}
 	if size == 254 {
-		v, err := bs.readUint32()
-		return uint64(v), err
+		v, buf, err := bs.readUint32()
+		if err != nil {
+			return 0, nil, err
+		}
+		readBuf = append(readBuf, buf...)
+		return uint64(v), readBuf, err
 	}
 
 	if size == 255 {
 		buf := make([]byte, 8)
-		return binary.LittleEndian.Uint64(buf), nil
+		//readBuf = append(readBuf, buf...)
+		return binary.LittleEndian.Uint64(buf), readBuf, nil
 	}
 
-	return 0, errors.Err("size is greater than 255")
+	return 0, nil, errors.Err("size is greater than 255")
 }
 
 func (bs *blockStream) setTransactions(block *model.Block) error {
-	tx := model.Transaction{}
 	var err error
+
 	for i := 0; i < block.TxCnt; i++ {
-		tx.Version, err = bs.readUint32()
-		if err != nil {
-			return err
-		}
+		tx := &model.Transaction{}
+		var txBytes []byte
+		var buf []byte
 
-		tx.InputCnt, err = bs.readCompactSize()
+		tx.Version, buf, err = bs.readUint32()
 		if err != nil {
 			return err
 		}
+		txBytes = append(txBytes, buf...)
+
+		tx.InputCnt, buf, err = bs.readCompactSize()
+		if err != nil {
+			return err
+		}
+		txBytes = append(txBytes, buf...)
+
 		if tx.InputCnt == 0 {
-			tx.IsSegWit, err = bs.readBool()
+			tx.IsSegWit, buf, err = bs.readBool()
 			if err != nil {
 				return err
 			}
-			tx.InputCnt, err = bs.readCompactSize()
+			txBytes = append(txBytes, buf...)
+
+			tx.InputCnt, buf, err = bs.readCompactSize()
 			if err != nil {
 				return err
 			}
+			txBytes = append(txBytes, buf...)
 		}
-		err = bs.setInputs(&tx)
+
+		txBytes, err = bs.setInputs(tx, txBytes)
 		if err != nil {
 			return err
 		}
 
-		tx.OutputCnt, err = bs.readCompactSize()
+		tx.OutputCnt, buf, err = bs.readCompactSize()
 		if err != nil {
 			return err
 		}
-		err = bs.setOutputs(&tx)
+		txBytes = append(txBytes, buf...)
+
+		if i == 19 && block.BlockHash == "b36031249a6675103c4e0c0225abfe65b7d1c43b15be3ca7f19478afc7703146" {
+			println("catch me here")
+		}
+
+		txBytes, err = bs.setOutputs(tx, txBytes)
 		if err != nil {
 			return err
 		}
 
 		if tx.IsSegWit {
+			panic("need to handle segwit buf returns properly")
 			for range tx.Inputs {
-				nrWitnesses, err := bs.readCompactSize()
+				nrWitnesses, _, err := bs.readCompactSize()
 				if err != nil {
 					return err
 				}
 				for i := 0; i < int(nrWitnesses); i++ {
 					witness := model.Witness{}
-					size, err := bs.readCompactSize()
+					size, _, err := bs.readCompactSize()
 					if err != nil {
 						return err
 					}
@@ -211,10 +258,14 @@ func (bs *blockStream) setTransactions(block *model.Block) error {
 				}
 			}
 		}
-		lockTimeBytes, err := bs.readUint32()
+
+		lockTimeBytes, buf, err := bs.readUint32()
 		if err != nil {
 			return err
 		}
+		txBytes = append(txBytes, buf...)
+
+		tx.Hash = chainhash.DoubleHashH(txBytes).String()
 		tx.LockTime = time.Unix(int64(lockTimeBytes), 0)
 
 		block.Transactions = append(block.Transactions, tx)
@@ -222,43 +273,80 @@ func (bs *blockStream) setTransactions(block *model.Block) error {
 	return nil
 }
 
-func (bs *blockStream) setInputs(tx *model.Transaction) error {
-
+func (bs *blockStream) setInputs(tx *model.Transaction, txBytes []byte) ([]byte, error) {
 	var err error
+
 	for i := 0; i < int(tx.InputCnt); i++ {
+		var buf []byte
 		in := model.Input{}
-		in.TxRef, err = bs.readBytes(32)
+
+		buf, err = bs.readBytes(32) //TxID
 		if err != nil {
-			return err
+			return nil, err
 		}
-		in.Position, err = bs.readUint32()
-		in.Script, err = bs.readString()
-		in.Sequence, err = bs.readUint32()
+		txBytes = append(txBytes, buf...)
+		in.TxRef = "Coinbase"
+		if !isCoinBase(buf) {
+			in.TxRef = hex.EncodeToString(util.ReverseBytes(buf))
+		}
+
+		in.Position, buf, err = bs.readUint32R()
+		if err != nil {
+			return nil, err
+		}
+		txBytes = append(txBytes, buf...)
+
+		scriptLength, buf, err := bs.readCompactSize()
+		if err != nil {
+			return nil, err
+		}
+		txBytes = append(txBytes, buf...)
+
+		scriptBytes, err := bs.readBytes(int(scriptLength))
+		if err != nil {
+			return nil, err
+		}
+		txBytes = append(txBytes, scriptBytes...)
+		in.Script = script.ToHex(scriptBytes)
+
+		in.Sequence, buf, err = bs.readUint32R()
+		if err != nil {
+			return nil, err
+		}
+		txBytes = append(txBytes, buf...)
 
 		tx.Inputs = append(tx.Inputs, in)
 	}
-	return nil
+	return txBytes, nil
 }
 
-func (bs *blockStream) setOutputs(tx *model.Transaction) error {
+func (bs *blockStream) setOutputs(tx *model.Transaction, txBytes []byte) ([]byte, error) {
 	var err error
 	for i := 0; i < int(tx.OutputCnt); i++ {
+		var buf []byte
 		out := model.Output{}
-		out.Amount, err = bs.readUint64()
+		out.Amount, buf, err = bs.readUint64()
 		if err != nil {
-			return err
+			return nil, err
 		}
-		scriptLength, err := bs.readCompactSize()
+		txBytes = append(txBytes, buf...)
+
+		scriptLength, buf, err := bs.readCompactSize()
 		if err != nil {
-			return err
+			return nil, err
 		}
-		out.Script, err = bs.readBytes(int(scriptLength))
+		txBytes = append(txBytes, buf...)
+
+		scriptBytes, err := bs.readBytes(int(scriptLength))
 		if err != nil {
-			return err
+			return nil, err
 		}
+		out.Script = script.ToHex(scriptBytes)
+		txBytes = append(txBytes, scriptBytes...)
+
 		tx.Outputs = append(tx.Outputs, out)
 	}
-	return nil
+	return txBytes, nil
 }
 
 func (bs *blockStream) readBytes(toRead int) ([]byte, error) {
@@ -270,52 +358,95 @@ func (bs *blockStream) readBytes(toRead int) ([]byte, error) {
 	return buf, nil
 }
 
-func (bs *blockStream) readUint64() (uint64, error) {
+func (bs *blockStream) readMagicNumber() ([]byte, error) {
+	var pos = 0
+	for pos < 4 {
+		magicPosByte := magicNumberConst[pos]
+		buf, err := bs.readBytes(1)
+		if err != nil {
+			return nil, err
+		}
+		if magicPosByte == buf[0] {
+			pos++
+		} else if pos == 4 {
+			break
+		} else if pos > 0 {
+			if buf[0] == magicNumberConst[0] {
+				pos = 1
+			} else {
+				pos = 0 /// A, B, C, D => A, B, A, B, C, D
+			}
+		}
+	}
+	return magicNumberConst, nil
+}
+
+func (bs *blockStream) readUint64() (uint64, []byte, error) {
 	buf, err := bs.readBytes(8)
 	if err != nil {
-		return 0, errors.Err(err)
+		return 0, nil, errors.Err(err)
 	}
-	return binary.LittleEndian.Uint64(buf), nil
+	return binary.LittleEndian.Uint64(buf), buf, nil
 }
 
-func (bs *blockStream) readUint32() (uint32, error) {
+func (bs *blockStream) readUint32() (uint32, []byte, error) {
 	buf, err := bs.readBytes(4)
 	if err != nil {
-		return 0, errors.Err(err)
+		return 0, nil, errors.Err(err)
 	}
-	return binary.LittleEndian.Uint32(buf), nil
+	return binary.LittleEndian.Uint32(buf), buf, nil
 }
 
-func (bs *blockStream) readUint8() (uint8, error) {
+func (bs *blockStream) readUint32R() (uint32, []byte, error) {
+	buf, err := bs.readBytes(4)
+	if err != nil {
+		return 0, nil, errors.Err(err)
+	}
+	return binary.LittleEndian.Uint32(util.ReverseBytes(buf)), buf, nil
+}
+
+func (bs *blockStream) readUint8() (uint8, []byte, error) {
 	buf, err := bs.readBytes(1)
 	if err != nil {
-		return 0, errors.Err(err)
+		return 0, nil, errors.Err(err)
 	}
-	return buf[0], nil
+	return buf[0], buf, nil
 }
 
-func (bs *blockStream) readBool() (bool, error) {
-	v, err := bs.readUint8()
+func (bs *blockStream) readBool() (bool, []byte, error) {
+	v, buf, err := bs.readUint8()
 	if err != nil {
-		return false, err
+		return false, nil, err
 	}
 	if v > 1 {
-		return false, errors.Err("meant to parse boolean but found byte greater than 1")
+		return false, nil, errors.Err("meant to parse boolean but found byte greater than 1")
 	}
 	if v == 0 {
-		return false, nil
+		return false, buf, nil
 	}
-	return true, nil
+	return true, buf, nil
 }
 
-func (bs *blockStream) readString() (string, error) {
-	size, err := bs.readCompactSize()
+func (bs *blockStream) readString() (string, []byte, error) {
+	size, readBuf, err := bs.readCompactSize()
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
+
 	buf, err := bs.readBytes(int(size))
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
-	return string(buf), nil
+	readBuf = append(readBuf, buf...)
+
+	return string(buf), readBuf, nil
+}
+
+func isCoinBase(txid []byte) bool {
+	for _, b := range txid {
+		if b != 0 {
+			return false
+		}
+	}
+	return true
 }

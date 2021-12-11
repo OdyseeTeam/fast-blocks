@@ -32,7 +32,7 @@ func LoadChain(chain blockchain.Chain) error {
 func startLoadWorker(worker int, chain blockchain.Chain, results chan<- error) {
 	var err error
 	var height int
-	var fileNr int
+	var fileNr int = 34
 Files:
 	for {
 		var blockStream stream.Blocks
@@ -50,7 +50,10 @@ Files:
 				break Files
 			}
 			height = block.Height
-			logrus.Info("Blockfile: ", fileNr, ", Block Nr: ", height, " Txs: ", len(block.Transactions))
+			if height%1000 == 0 {
+				logrus.Info("Blockfile: ", fileNr, ", Block Nr: ", height, " Txs: ", len(block.Transactions))
+			}
+
 		}
 		fileNr++
 	}

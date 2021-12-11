@@ -3,6 +3,7 @@ package model
 import "time"
 
 type Transaction struct {
+	Hash      string
 	Version   uint32
 	IsSegWit  bool
 	InputCnt  uint64

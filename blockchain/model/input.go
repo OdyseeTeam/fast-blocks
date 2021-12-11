@@ -1,8 +1,10 @@
 package model
 
+import "fast-blocks/blockchain/script"
+
 type Input struct {
-	TxRef    []byte
+	TxRef    string
 	Position uint32
-	Script   string
+	Script   *script.Hex
 	Sequence uint32
 }

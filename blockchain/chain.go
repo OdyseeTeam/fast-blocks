@@ -15,6 +15,7 @@ type client struct {
 	blockFilesFound bool
 	blockFilesGiven int
 	blocksDir       string
+	blockFile       string
 	blockFiles      []string
 }
 
@@ -24,10 +25,11 @@ type Chain interface {
 
 type Config struct {
 	BlocksDir string
+	BlockFile string
 }
 
 func New(config Config) (Chain, error) {
-	chain := &client{blocksDir: config.BlocksDir}
+	chain := &client{blocksDir: config.BlocksDir, blockFile: config.BlockFile}
 	err := chain.loadBlockFiles()
 	if err != nil {
 		return nil, err
@@ -38,6 +40,14 @@ func New(config Config) (Chain, error) {
 func (c *client) NextBlockFile(startingHeight int) (stream.Blocks, error) {
 	if len(c.blockFiles) == 0 {
 		return nil, nil
+	}
+	if c.blockFile != "" {
+		for _, file := range c.blockFiles {
+			if file == c.blockFile {
+				c.blockFiles = []string{}
+				return stream.New(file, c.blockFilesGiven, startingHeight, nil)
+			}
+		}
 	}
 	c.Lock()
 	defer c.Unlock()

@@ -8,7 +8,7 @@ import (
 )
 
 func main() {
-	chain, err := blockchain.New(blockchain.Config{BlocksDir: "./blocks/"})
+	chain, err := blockchain.New(blockchain.Config{BlocksDir: "./blocks/"}) //, BlockFile: "blocks/blk00034.dat"})
 	if err != nil {
 		logrus.Fatal(errors.FullTrace(err))
 	}
