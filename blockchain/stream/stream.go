@@ -62,9 +62,6 @@ func (bs *blockStream) NextBlock() (*model.Block, error) {
 var magicNumberConst = []byte{250, 228, 170, 241}
 
 func (bs *blockStream) setBlockInfo(block *model.Block) error {
-	if block.Height == 3992 {
-		println("problematic block")
-	}
 	magicNumber, err := bs.readMagicNumber()
 	if err != nil {
 		return errors.Err(err)
@@ -176,7 +173,7 @@ func (bs *blockStream) readCompactSize() (uint64, []byte, error) {
 
 	if size == 255 {
 		buf := make([]byte, 8)
-		//readBuf = append(readBuf, buf...)
+		readBuf = append(readBuf, buf...)
 		return binary.LittleEndian.Uint64(buf), readBuf, nil
 	}
 
@@ -201,25 +198,34 @@ func (bs *blockStream) setTransactions(block *model.Block) error {
 		if err != nil {
 			return err
 		}
-		txBytes = append(txBytes, buf...)
 
 		if tx.InputCnt == 0 {
 			tx.IsSegWit, buf, err = bs.readBool()
 			if err != nil {
 				return err
 			}
-			txBytes = append(txBytes, buf...)
+			if !tx.IsSegWit {
+				panic("zero inputs and not segwit!!")
+			}
+			//txBytes = append(txBytes, buf...) Not included for Segwit TxHash
 
 			tx.InputCnt, buf, err = bs.readCompactSize()
 			if err != nil {
 				return err
 			}
-			txBytes = append(txBytes, buf...)
-		}
+			txBytes = append(txBytes, buf...) // From Segwit input count
 
-		txBytes, err = bs.setInputs(tx, txBytes)
-		if err != nil {
-			return err
+			txBytes, err = bs.setInputs(tx, txBytes)
+			if err != nil {
+				return err
+			}
+
+		} else {
+			txBytes = append(txBytes, buf...) // From normal input count
+			txBytes, err = bs.setInputs(tx, txBytes)
+			if err != nil {
+				return err
+			}
 		}
 
 		tx.OutputCnt, buf, err = bs.readCompactSize()
@@ -228,32 +234,30 @@ func (bs *blockStream) setTransactions(block *model.Block) error {
 		}
 		txBytes = append(txBytes, buf...)
 
-		if i == 19 && block.BlockHash == "b36031249a6675103c4e0c0225abfe65b7d1c43b15be3ca7f19478afc7703146" {
-			println("catch me here")
-		}
-
 		txBytes, err = bs.setOutputs(tx, txBytes)
 		if err != nil {
 			return err
 		}
 
 		if tx.IsSegWit {
-			panic("need to handle segwit buf returns properly")
-			for range tx.Inputs {
+			for i := 0; i < int(tx.InputCnt); i++ {
 				nrWitnesses, _, err := bs.readCompactSize()
 				if err != nil {
 					return err
 				}
+
 				for i := 0; i < int(nrWitnesses); i++ {
 					witness := model.Witness{}
 					size, _, err := bs.readCompactSize()
 					if err != nil {
 						return err
 					}
+
 					witness.Bytes, err = bs.readBytes(int(size))
 					if err != nil {
 						return err
 					}
+
 					tx.Witnesses = append(tx.Witnesses, witness)
 				}
 			}

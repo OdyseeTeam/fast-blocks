@@ -41,6 +41,10 @@ Files:
 			break
 		}
 		for {
+			if blockStream == nil {
+				println("finished processing files :) ")
+				return // Need to go into a minitoring mode
+			}
 			var block *model.Block
 			block, err = blockStream.NextBlock()
 			if err != nil {
