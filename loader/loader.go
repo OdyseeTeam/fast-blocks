@@ -32,7 +32,7 @@ func LoadChain(chain blockchain.Chain) error {
 func startLoadWorker(worker int, chain blockchain.Chain, results chan<- error) {
 	var err error
 	var height int
-	var fileNr int = 34
+	var fileNr int
 Files:
 	for {
 		var blockStream stream.Blocks
