@@ -9,7 +9,7 @@ import (
 	"io"
 )
 
-var parallelFilesToLoad = 10
+var parallelFilesToLoad = 20
 
 var nextFileToLoad chan int
 var filesToLoad map[int]string
