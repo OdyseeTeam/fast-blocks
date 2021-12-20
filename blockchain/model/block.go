@@ -16,7 +16,7 @@ type Block struct {
 	PrevBlockHash string
 	MerkleRoot    string
 	ClaimTrieRoot string
-	Transactions  []*Transaction
+	Transactions  []string
 	TxCnt         int
 }
 

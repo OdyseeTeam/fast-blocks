@@ -6,9 +6,14 @@ import (
 	"encoding/hex"
 	"fast-blocks/blockchain/model"
 	"fast-blocks/blockchain/script"
+	"fast-blocks/lbrycrd"
+	"fast-blocks/storage"
 	"fast-blocks/util"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
+	"github.com/btcsuite/btcd/txscript"
 	"github.com/lbryio/lbry.go/v2/extras/errors"
+	"github.com/lbryio/lbry.go/v2/schema/stake"
+	"github.com/sirupsen/logrus"
 	"io"
 	"os"
 	"time"
@@ -16,6 +21,7 @@ import (
 
 type Blocks interface {
 	NextBlock() (*model.Block, error)
+	BlockFile() string
 }
 
 type blockStream struct {
@@ -43,6 +49,10 @@ func New(path string, fileNr, height int, data []byte) (Blocks, error) {
 	return &blockStream{path: path, data: bytes.NewBuffer(data)}, nil
 }
 
+func (bs blockStream) BlockFile() string {
+	return bs.file.Name()
+}
+
 func (bs *blockStream) NextBlock() (*model.Block, error) {
 	block := &model.Block{Height: bs.blockNr}
 	bs.blockNr = bs.blockNr + 1
@@ -51,12 +61,15 @@ func (bs *blockStream) NextBlock() (*model.Block, error) {
 		return nil, err
 	}
 
-	err = bs.setTransactions(block)
+	transactions, err := bs.setTransactions(block)
 	if err != nil {
 		return nil, err
 	}
+	for _, t := range transactions {
+		block.Transactions = append(block.Transactions, t.Hash)
+	}
 
-	return block, nil
+	return block, errors.Err(storage.DB.Exec(`INSERT INTO blocks VALUES ?`, &block))
 }
 
 var magicNumberConst = []byte{250, 228, 170, 241}
@@ -180,29 +193,31 @@ func (bs *blockStream) readCompactSize() (uint64, []byte, error) {
 	return 0, nil, errors.Err("size is greater than 255")
 }
 
-func (bs *blockStream) setTransactions(block *model.Block) error {
+func (bs *blockStream) setTransactions(block *model.Block) ([]model.Transaction, error) {
 	var err error
-
+	var transactions []model.Transaction
 	for i := 0; i < block.TxCnt; i++ {
-		tx := &model.Transaction{}
+		var outputs []model.Output
+		var inputs []model.Input
+		tx := model.Transaction{}
 		var txBytes []byte
 		var buf []byte
 
 		tx.Version, buf, err = bs.readUint32()
 		if err != nil {
-			return err
+			return nil, err
 		}
 		txBytes = append(txBytes, buf...)
 
 		tx.InputCnt, buf, err = bs.readCompactSize()
 		if err != nil {
-			return err
+			return nil, err
 		}
 
 		if tx.InputCnt == 0 {
 			tx.IsSegWit, buf, err = bs.readBool()
 			if err != nil {
-				return err
+				return nil, err
 			}
 			if !tx.IsSegWit {
 				panic("zero inputs and not segwit!!")
@@ -211,51 +226,51 @@ func (bs *blockStream) setTransactions(block *model.Block) error {
 
 			tx.InputCnt, buf, err = bs.readCompactSize()
 			if err != nil {
-				return err
+				return nil, err
 			}
 			txBytes = append(txBytes, buf...) // From Segwit input count
 
-			txBytes, err = bs.setInputs(tx, txBytes)
+			txBytes, inputs, err = bs.setInputs(&tx, txBytes)
 			if err != nil {
-				return err
+				return nil, err
 			}
 
 		} else {
 			txBytes = append(txBytes, buf...) // From normal input count
-			txBytes, err = bs.setInputs(tx, txBytes)
+			txBytes, inputs, err = bs.setInputs(&tx, txBytes)
 			if err != nil {
-				return err
+				return nil, err
 			}
 		}
 
 		tx.OutputCnt, buf, err = bs.readCompactSize()
 		if err != nil {
-			return err
+			return nil, err
 		}
 		txBytes = append(txBytes, buf...)
 
-		txBytes, err = bs.setOutputs(tx, txBytes)
+		txBytes, outputs, err = bs.setOutputs(&tx, txBytes)
 		if err != nil {
-			return err
+			return nil, err
 		}
 
 		if tx.IsSegWit {
 			for i := 0; i < int(tx.InputCnt); i++ {
 				nrWitnesses, _, err := bs.readCompactSize()
 				if err != nil {
-					return err
+					return nil, err
 				}
 
 				for i := 0; i < int(nrWitnesses); i++ {
 					witness := model.Witness{}
 					size, _, err := bs.readCompactSize()
 					if err != nil {
-						return err
+						return nil, err
 					}
 
 					witness.Bytes, err = bs.readBytes(int(size))
 					if err != nil {
-						return err
+						return nil, err
 					}
 
 					tx.Witnesses = append(tx.Witnesses, witness)
@@ -265,28 +280,51 @@ func (bs *blockStream) setTransactions(block *model.Block) error {
 
 		lockTimeBytes, buf, err := bs.readUint32()
 		if err != nil {
-			return err
+			return nil, err
 		}
 		txBytes = append(txBytes, buf...)
 
 		tx.Hash = chainhash.DoubleHashH(txBytes).String()
+		tx.BlockHash = block.BlockHash
+		for _, o := range outputs {
+			o.TransactionHash = tx.Hash
+			o.BlockHash = block.BlockHash
+			err := storage.DB.Exec(`INSERT INTO outputs VALUES ?`, &o)
+			if err != nil {
+				return nil, errors.Err(err)
+			}
+		}
+		for _, i := range inputs {
+			i.TransactionHash = tx.Hash
+			i.BlockHash = block.BlockHash
+			err := storage.DB.Exec(`INSERT INTO inputs VALUES ?`, &i)
+			if err != nil {
+				return nil, errors.Err(err)
+			}
+		}
+
 		tx.LockTime = time.Unix(int64(lockTimeBytes), 0)
 
-		block.Transactions = append(block.Transactions, tx)
+		err = storage.DB.Exec(`INSERT INTO transactions VALUES ?`, &tx)
+		if err != nil {
+			return nil, errors.Err(err)
+		}
+
+		transactions = append(transactions, tx)
 	}
-	return nil
+	return transactions, nil
 }
 
-func (bs *blockStream) setInputs(tx *model.Transaction, txBytes []byte) ([]byte, error) {
+func (bs *blockStream) setInputs(tx *model.Transaction, txBytes []byte) ([]byte, []model.Input, error) {
 	var err error
-
+	var inputs []model.Input
 	for i := 0; i < int(tx.InputCnt); i++ {
 		var buf []byte
 		in := model.Input{}
 
 		buf, err = bs.readBytes(32) //TxID
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		txBytes = append(txBytes, buf...)
 		in.TxRef = "Coinbase"
@@ -296,61 +334,110 @@ func (bs *blockStream) setInputs(tx *model.Transaction, txBytes []byte) ([]byte,
 
 		in.Position, buf, err = bs.readUint32R()
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		txBytes = append(txBytes, buf...)
 
 		scriptLength, buf, err := bs.readCompactSize()
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		txBytes = append(txBytes, buf...)
 
 		scriptBytes, err := bs.readBytes(int(scriptLength))
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		txBytes = append(txBytes, scriptBytes...)
 		in.Script = script.ToHex(scriptBytes)
 
 		in.Sequence, buf, err = bs.readUint32R()
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		txBytes = append(txBytes, buf...)
 
-		tx.Inputs = append(tx.Inputs, in)
+		inputs = append(inputs, in)
 	}
-	return txBytes, nil
+	return txBytes, inputs, nil
 }
 
-func (bs *blockStream) setOutputs(tx *model.Transaction, txBytes []byte) ([]byte, error) {
+func (bs *blockStream) setOutputs(tx *model.Transaction, txBytes []byte) ([]byte, []model.Output, error) {
 	var err error
+	var outputs []model.Output
 	for i := 0; i < int(tx.OutputCnt); i++ {
 		var buf []byte
 		out := model.Output{}
 		out.Amount, buf, err = bs.readUint64()
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		txBytes = append(txBytes, buf...)
 
 		scriptLength, buf, err := bs.readCompactSize()
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		txBytes = append(txBytes, buf...)
 
 		scriptBytes, err := bs.readBytes(int(scriptLength))
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		out.Script = script.ToHex(scriptBytes)
 		txBytes = append(txBytes, scriptBytes...)
+		pk, _ := txscript.ParsePkScript(scriptBytes)
+		scriptType := lbrycrd.GetPublicKeyScriptType(scriptBytes)
+		if pk.Class() != txscript.NonStandardTy {
+			address := lbrycrd.GetAddressFromPublicKeyScript(scriptBytes)
+			out.Address = model.Address{Encoded: address}
+			out.PKScript = scriptBytes
+			out.ScriptType = scriptType
+		} else if pk.Class() == txscript.NonStandardTy {
+			if lbrycrd.IsClaimScript(scriptBytes) {
+				txscript.NewScriptBuilder()
+				if lbrycrd.IsClaimNameScript(scriptBytes) {
+					name, value, pkscript, err := lbrycrd.ParseClaimNameScript(scriptBytes)
+					if err != nil {
+						return nil, nil, err
+					}
+					if false {
+						println("Name: ", name)
+					}
+					_, err = stake.DecodeClaimBytes(value, "lbrycrd_main")
+					if err != nil {
+						logrus.Error(err)
+						continue
+					}
+					addy := lbrycrd.GetAddressFromPublicKeyScript(pkscript)
+					if err != nil {
+						return nil, nil, err
+					}
+					out.Address = model.Address{Encoded: addy}
+					//println(helper.Claim.String())
+					//err = storage.DB.Exec(`INSERT INTO claims VALUES ?`, &helper.Claim)
+					//if err != nil {
+					//	return nil, nil, errors.Err(err)
+					//}
+				}
+			} else if lbrycrd.IsPurchaseScript(scriptBytes) {
+				purchase, err := lbrycrd.ParsePurchaseScript(scriptBytes)
+				if err != nil {
+					return nil, nil, err
+				}
+				if false {
+					println("Purchase: ", purchase.ClaimHash)
+				}
 
-		tx.Outputs = append(tx.Outputs, out)
+			} else {
+				if false {
+					println(txscript.DisasmString(scriptBytes))
+					println("Non claim, no standard transaction")
+				}
+			}
+		}
+		outputs = append(outputs, out)
 	}
-	return txBytes, nil
+	return txBytes, outputs, nil
 }
 
 func (bs *blockStream) readBytes(toRead int) ([]byte, error) {

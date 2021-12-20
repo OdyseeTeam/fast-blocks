@@ -1,8 +1,14 @@
 package model
 
-import "fast-blocks/blockchain/script"
+import pb "github.com/lbryio/types/v2/go"
 
 type Output struct {
-	Amount uint64
-	Script *script.Hex
+	BlockHash       string
+	TransactionHash string
+	Amount          uint64
+	Address         Address
+	ScriptType      string
+	PKScript        []byte
+	Claim           *pb.Claim
+	Purchase        *pb.Purchase
 }
