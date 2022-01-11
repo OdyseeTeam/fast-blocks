@@ -11,8 +11,6 @@ import (
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/txscript"
 	"github.com/lbryio/lbry.go/v2/extras/errors"
-	"github.com/lbryio/lbry.go/v2/schema/stake"
-	"github.com/sirupsen/logrus"
 	"io"
 	"os"
 	"time"
@@ -65,7 +63,8 @@ func (bs *blockStream) NextBlock() (*model.Block, error) {
 		return nil, err
 	}
 	for _, t := range transactions {
-		block.Transactions = append(block.Transactions, t.Hash)
+		block.TransactionHashes = append(block.TransactionHashes, t.Hash)
+		block.Transactions = append(block.Transactions, t)
 	}
 
 	return block, nil //errors.Err(storage.DB.Exec(`INSERT INTO blocks VALUES ?`, &block))
@@ -285,17 +284,19 @@ func (bs *blockStream) setTransactions(block *model.Block) ([]model.Transaction,
 
 		tx.Hash = chainhash.DoubleHashH(txBytes).String()
 		tx.BlockHash = block.BlockHash
-		for _, o := range outputs {
-			o.TransactionHash = tx.Hash
-			o.BlockHash = block.BlockHash
+		for _, out := range outputs {
+			out.TransactionHash = tx.Hash
+			out.BlockHash = block.BlockHash
+			tx.Outputs = append(tx.Outputs, out)
 			//err := storage.DB.Exec(`INSERT INTO outputs VALUES ?`, &o)
 			//if err != nil {
 			//	return nil, errors.Err(err)
 			//}
 		}
-		for _, i := range inputs {
-			i.TransactionHash = tx.Hash
-			i.BlockHash = block.BlockHash
+		for _, in := range inputs {
+			in.TransactionHash = tx.Hash
+			in.BlockHash = block.BlockHash
+			tx.Inputs = append(tx.Inputs, in)
 			//err := storage.DB.Exec(`INSERT INTO inputs VALUES ?`, &i)
 			//if err != nil {
 			//	return nil, errors.Err(err)
@@ -395,18 +396,18 @@ func (bs *blockStream) setOutputs(tx *model.Transaction, txBytes []byte) ([]byte
 			if lbrycrd.IsClaimScript(scriptBytes) {
 				txscript.NewScriptBuilder()
 				if lbrycrd.IsClaimNameScript(scriptBytes) {
-					name, value, pkscript, err := lbrycrd.ParseClaimNameScript(scriptBytes)
+					name, _, pkscript, err := lbrycrd.ParseClaimNameScript(scriptBytes)
 					if err != nil {
 						return nil, nil, err
 					}
 					if false {
 						println("Name: ", name)
 					}
-					_, err = stake.DecodeClaimBytes(value, "lbrycrd_main")
+					/*_, err = stake.DecodeClaimBytes(value, "lbrycrd_main")
 					if err != nil {
 						logrus.Error(err)
 						continue
-					}
+					}*/
 					addy := lbrycrd.GetAddressFromPublicKeyScript(pkscript)
 					if err != nil {
 						return nil, nil, err

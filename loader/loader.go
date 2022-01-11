@@ -53,7 +53,7 @@ Files:
 				}
 				break Files
 			}
-			chain.Notify(block)
+			chain.Notify(*block)
 			height = block.Height
 			if height%1000 == 0 {
 				logrus.Info("Worker: ", worker, " Blockfile: ", blockStream.BlockFile(), ", Block Nr: ", height, " Txs: ", len(block.Transactions))

@@ -13,13 +13,13 @@ import (
 func main() {
 	server.Start()
 	storage.Start()
-	chain, err := blockchain.New(blockchain.Config{BlocksDir: "/home/odysee/fast-blocks/blocks/"}) //, BlockFile: "blocks/blk00038.dat"})
+	//chain, err := blockchain.New(blockchain.Config{BlocksDir: "/home/odysee/fast-blocks/blocks/"}) //, BlockFile: "blocks/blk00038.dat"})
 	//chain, err := blockchain.New(blockchain.Config{BlocksDir: "./blocks/"})
-	//chain, err := blockchain.New(blockchain.Config{BlocksDir: "./blocks/", BlockFile: "blocks/blk00038.dat"})
+	chain, err := blockchain.New(blockchain.Config{BlocksDir: "./blocks/", BlockFile: "blocks/blk00038.dat"})
 	if err != nil {
 		logrus.Fatal(errors.FullTrace(err))
 	}
-	chain.OnOutput(func(vout *model.Output) {
+	chain.OnOutput(func(vout model.Output) {
 		println("Type: ", vout.ScriptType, " Address: ", vout.Address.Encoded, " Amount: ", vout.Amount)
 	})
 	err = loader.LoadChain(chain)

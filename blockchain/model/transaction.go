@@ -8,15 +8,9 @@ type Transaction struct {
 	Version   uint32
 	IsSegWit  bool
 	InputCnt  uint64
-	Inputs    struct {
-		TxID string
-		Vout int
-	}
+	Inputs    []Input
 	OutputCnt uint64
-	Outputs   struct {
-		TxID string
-		Vout int
-	}
+	Outputs   []Output
 	Witnesses []Witness
 	LockTime  time.Time
 }

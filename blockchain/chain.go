@@ -46,19 +46,19 @@ type client struct {
 	blockFile       string
 	blockFiles      []string
 
-	onBlockFn       func(block *model.Block)
-	onTransactionFn func(transaction *model.Transaction)
-	onInputFn       func(input *model.Input)
-	onOutputFn      func(output *model.Output)
+	onBlockFn       func(block model.Block)
+	onTransactionFn func(transaction model.Transaction)
+	onInputFn       func(input model.Input)
+	onOutputFn      func(output model.Output)
 }
 
 type Chain interface {
 	NextBlockFile(startingHeight int) (stream.Blocks, error)
-	OnBlock(func(block *model.Block))
-	OnTransaction(func(transaction *model.Transaction))
-	OnInput(func(input *model.Input))
-	OnOutput(func(output *model.Output))
-	Notify(block *model.Block)
+	OnBlock(func(block model.Block))
+	OnTransaction(func(transaction model.Transaction))
+	OnInput(func(input model.Input))
+	OnOutput(func(output model.Output))
+	Notify(block model.Block)
 }
 
 type Config struct {
@@ -114,24 +114,40 @@ func (c *client) loadBlockFiles() error {
 	return nil
 }
 
-func (c *client) OnBlock(fn func(*model.Block)) {
+func (c *client) OnBlock(fn func(model.Block)) {
 	c.onBlockFn = fn
 }
 
-func (c *client) OnTransaction(fn func(*model.Transaction)) {
+func (c *client) OnTransaction(fn func(model.Transaction)) {
 	c.onTransactionFn = fn
 }
 
-func (c *client) OnInput(fn func(*model.Input)) {
+func (c *client) OnInput(fn func(model.Input)) {
 	c.onInputFn = fn
 }
 
-func (c *client) OnOutput(fn func(*model.Output)) {
+func (c *client) OnOutput(fn func(model.Output)) {
 	c.onOutputFn = fn
 }
 
-func (c *client) Notify(block *model.Block) {
+func (c *client) Notify(block model.Block) {
 	if c.onBlockFn != nil {
 		c.onBlockFn(block)
 	}
+	for _, tx := range block.Transactions {
+		if c.onTransactionFn != nil {
+			c.onTransactionFn(tx)
+		}
+		if c.onOutputFn != nil {
+			for _, out := range tx.Outputs {
+				c.onOutputFn(out)
+			}
+		}
+		if c.onInputFn != nil {
+			for _, in := range tx.Inputs {
+				c.onInputFn(in)
+			}
+		}
+	}
+
 }
