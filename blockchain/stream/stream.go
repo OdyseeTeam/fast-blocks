@@ -7,7 +7,6 @@ import (
 	"fast-blocks/blockchain/model"
 	"fast-blocks/blockchain/script"
 	"fast-blocks/lbrycrd"
-	"fast-blocks/storage"
 	"fast-blocks/util"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/txscript"
@@ -69,7 +68,7 @@ func (bs *blockStream) NextBlock() (*model.Block, error) {
 		block.Transactions = append(block.Transactions, t.Hash)
 	}
 
-	return block, errors.Err(storage.DB.Exec(`INSERT INTO blocks VALUES ?`, &block))
+	return block, nil //errors.Err(storage.DB.Exec(`INSERT INTO blocks VALUES ?`, &block))
 }
 
 var magicNumberConst = []byte{250, 228, 170, 241}
@@ -289,26 +288,26 @@ func (bs *blockStream) setTransactions(block *model.Block) ([]model.Transaction,
 		for _, o := range outputs {
 			o.TransactionHash = tx.Hash
 			o.BlockHash = block.BlockHash
-			err := storage.DB.Exec(`INSERT INTO outputs VALUES ?`, &o)
-			if err != nil {
-				return nil, errors.Err(err)
-			}
+			//err := storage.DB.Exec(`INSERT INTO outputs VALUES ?`, &o)
+			//if err != nil {
+			//	return nil, errors.Err(err)
+			//}
 		}
 		for _, i := range inputs {
 			i.TransactionHash = tx.Hash
 			i.BlockHash = block.BlockHash
-			err := storage.DB.Exec(`INSERT INTO inputs VALUES ?`, &i)
-			if err != nil {
-				return nil, errors.Err(err)
-			}
+			//err := storage.DB.Exec(`INSERT INTO inputs VALUES ?`, &i)
+			//if err != nil {
+			//	return nil, errors.Err(err)
+			//}
 		}
 
 		tx.LockTime = time.Unix(int64(lockTimeBytes), 0)
 
-		err = storage.DB.Exec(`INSERT INTO transactions VALUES ?`, &tx)
-		if err != nil {
-			return nil, errors.Err(err)
-		}
+		//err = storage.DB.Exec(`INSERT INTO transactions VALUES ?`, &tx)
+		//if err != nil {
+		//	return nil, errors.Err(err)
+		//}
 
 		transactions = append(transactions, tx)
 	}
