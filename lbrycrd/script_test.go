@@ -2,8 +2,9 @@ package lbrycrd
 
 import (
 	"encoding/hex"
-	"fast-blocks/util"
 	"testing"
+
+	"github.com/OdyseeTeam/fast-blocks/util"
 
 	"github.com/btcsuite/btcd/txscript"
 )
@@ -36,7 +37,7 @@ var P2WPKHPairs = []HashAddressPair{ //From Testnet
 
 func TestAddressExtraction(t *testing.T) {
 	//Should add main net examples when live.
-	global.BlockChainName = lbrycrdTestnet
+	//global.BlockChainName = lbrycrdTestnet
 	chainParams, err := GetChainParams()
 	if err != nil {
 		t.Error(err)
@@ -61,7 +62,7 @@ func TestAddressExtraction(t *testing.T) {
 
 func TestGetAddressFromP2WPKH(t *testing.T) {
 	//Should add main net examples when live.
-	global.BlockChainName = lbrycrdTestnet
+	//global.BlockChainName = lbrycrdTestnet
 	for _, pair := range P2WPKHPairs {
 		result, err := getAddressFromP2WPKH(pair.hash)
 		if err != nil {
@@ -71,7 +72,7 @@ func TestGetAddressFromP2WPKH(t *testing.T) {
 			t.Errorf("expected '%s' but got '%s' instead", pair.address, result)
 		}
 	}
-	global.BlockChainName = lbrycrdMain
+	//global.BlockChainName = lbrycrdMain
 }
 
 func TestGetAddressFromP2PKH(t *testing.T) {

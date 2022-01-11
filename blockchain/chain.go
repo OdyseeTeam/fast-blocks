@@ -1,17 +1,18 @@
 package blockchain
 
 import (
-	"fast-blocks/blockchain/model"
-	"fast-blocks/blockchain/stream"
-	"github.com/btcsuite/btcd/chaincfg"
-	"github.com/btcsuite/btcd/chaincfg/chainhash"
-	"github.com/btcsuite/btcd/wire"
-	"github.com/lbryio/lbry.go/v2/extras/errors"
-	"github.com/sirupsen/logrus"
 	"os"
 	"path/filepath"
 	"regexp"
 	"sync"
+
+	"github.com/OdyseeTeam/fast-blocks/blockchain/model"
+	"github.com/OdyseeTeam/fast-blocks/blockchain/stream"
+	"github.com/btcsuite/btcd/chaincfg"
+	"github.com/btcsuite/btcd/chaincfg/chainhash"
+	"github.com/btcsuite/btcd/wire"
+	"github.com/cockroachdb/errors"
+	"github.com/sirupsen/logrus"
 )
 
 var GenesisHash = chainhash.Hash([chainhash.HashSize]byte{ // Make go vet happy.
@@ -108,7 +109,7 @@ func (c *client) loadBlockFiles() error {
 		return nil
 	})
 	if err != nil {
-		return errors.Err(err)
+		return errors.WithStack(err)
 	}
 	c.blockFiles = files
 	return nil
@@ -134,6 +135,7 @@ func (c *client) Notify(block model.Block) {
 	if c.onBlockFn != nil {
 		c.onBlockFn(block)
 	}
+
 	for _, tx := range block.Transactions {
 		if c.onTransactionFn != nil {
 			c.onTransactionFn(tx)

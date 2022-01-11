@@ -1,12 +1,14 @@
 package loader
 
 import (
-	"fast-blocks/blockchain"
-	"fast-blocks/blockchain/model"
-	"fast-blocks/blockchain/stream"
-	"github.com/lbryio/lbry.go/v2/extras/errors"
-	"github.com/sirupsen/logrus"
 	"io"
+
+	"github.com/OdyseeTeam/fast-blocks/blockchain"
+	"github.com/OdyseeTeam/fast-blocks/blockchain/model"
+	"github.com/OdyseeTeam/fast-blocks/blockchain/stream"
+
+	"github.com/cockroachdb/errors"
+	"github.com/sirupsen/logrus"
 )
 
 var parallelFilesToLoad = 50
@@ -19,12 +21,14 @@ func LoadChain(chain blockchain.Chain) error {
 	for i := 0; i < parallelFilesToLoad; i++ {
 		go startLoadWorker(i, chain, results)
 	}
+
 	for i := 0; i < parallelFilesToLoad; i++ {
 		err := <-results
 		if err != nil {
-			logrus.Error(errors.FullTrace(err))
+			logrus.Errorf("%+v", err)
 		}
 	}
+
 	close(results)
 	return nil
 }
@@ -40,11 +44,13 @@ Files:
 		if err != nil {
 			break
 		}
+
 		for {
 			if blockStream == nil {
 				println("finished processing files :) ")
 				return // Need to go into a minitoring mode
 			}
+
 			var block *model.Block
 			block, err = blockStream.NextBlock()
 			if err != nil {
@@ -53,12 +59,12 @@ Files:
 				}
 				break Files
 			}
+
 			chain.Notify(*block)
 			height = block.Height
 			if height%1000 == 0 {
 				logrus.Info("Worker: ", worker, " Blockfile: ", blockStream.BlockFile(), ", Block Nr: ", height, " Txs: ", len(block.Transactions))
 			}
-
 		}
 		fileNr++
 	}

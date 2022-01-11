@@ -1,29 +1,34 @@
 package main
 
 import (
-	"fast-blocks/blockchain"
-	"fast-blocks/blockchain/model"
-	"fast-blocks/loader"
-	"fast-blocks/server"
-	"fast-blocks/storage"
-	"github.com/lbryio/lbry.go/v2/extras/errors"
+	"os"
+
+	"github.com/OdyseeTeam/fast-blocks/blockchain"
+	"github.com/OdyseeTeam/fast-blocks/blockchain/model"
+	"github.com/OdyseeTeam/fast-blocks/loader"
+	"github.com/OdyseeTeam/fast-blocks/server"
+	"github.com/OdyseeTeam/fast-blocks/storage"
+
 	"github.com/sirupsen/logrus"
 )
 
 func main() {
 	server.Start()
 	storage.Start()
-	//chain, err := blockchain.New(blockchain.Config{BlocksDir: "/home/odysee/fast-blocks/blocks/"}) //, BlockFile: "blocks/blk00038.dat"})
+	chain, err := blockchain.New(blockchain.Config{BlocksDir: "/home/grin/.lbrycrd/blocks/"}) //, BlockFile: "blocks/blk00038.dat"})
 	//chain, err := blockchain.New(blockchain.Config{BlocksDir: "./blocks/"})
-	chain, err := blockchain.New(blockchain.Config{BlocksDir: "./blocks/", BlockFile: "blocks/blk00038.dat"})
+	//chain, err := blockchain.New(blockchain.Config{BlocksDir: "./blocks/", BlockFile: "blocks/blk00038.dat"})
 	if err != nil {
-		logrus.Fatal(errors.FullTrace(err))
+		logrus.Fatalf("%+v", err)
 	}
+
 	chain.OnOutput(func(vout model.Output) {
 		println("Type: ", vout.ScriptType, " Address: ", vout.Address.Encoded, " Amount: ", vout.Amount)
+		os.Exit(1)
 	})
+
 	err = loader.LoadChain(chain)
 	if err != nil {
-		logrus.Error(errors.FullTrace(err))
+		logrus.Fatalf("%+v", err)
 	}
 }

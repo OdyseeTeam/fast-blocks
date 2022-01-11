@@ -4,16 +4,17 @@ import (
 	"bytes"
 	"encoding/binary"
 	"encoding/hex"
-	"fast-blocks/blockchain/model"
-	"fast-blocks/blockchain/script"
-	"fast-blocks/lbrycrd"
-	"fast-blocks/util"
-	"github.com/btcsuite/btcd/chaincfg/chainhash"
-	"github.com/btcsuite/btcd/txscript"
-	"github.com/lbryio/lbry.go/v2/extras/errors"
 	"io"
 	"os"
 	"time"
+
+	"github.com/OdyseeTeam/fast-blocks/blockchain/model"
+	"github.com/OdyseeTeam/fast-blocks/blockchain/script"
+	"github.com/OdyseeTeam/fast-blocks/lbrycrd"
+	"github.com/OdyseeTeam/fast-blocks/util"
+	"github.com/btcsuite/btcd/chaincfg/chainhash"
+	"github.com/btcsuite/btcd/txscript"
+	"github.com/cockroachdb/errors"
 )
 
 type Blocks interface {
@@ -38,7 +39,7 @@ func New(path string, fileNr, height int, data []byte) (Blocks, error) {
 	if len(data) == 0 {
 		file, err := os.OpenFile(path, os.O_RDONLY, 0)
 		if err != nil {
-			return nil, errors.Err(err)
+			return nil, errors.WithStack(err)
 		}
 		return &blockStream{path: path, file: file, fileNr: fileNr, blockNr: height}, nil
 	}
@@ -67,7 +68,7 @@ func (bs *blockStream) NextBlock() (*model.Block, error) {
 		block.Transactions = append(block.Transactions, t)
 	}
 
-	return block, nil //errors.Err(storage.DB.Exec(`INSERT INTO blocks VALUES ?`, &block))
+	return block, nil //errors.WithStack(storage.DB.Exec(`INSERT INTO blocks VALUES ?`, &block))
 }
 
 var magicNumberConst = []byte{250, 228, 170, 241}
@@ -75,16 +76,16 @@ var magicNumberConst = []byte{250, 228, 170, 241}
 func (bs *blockStream) setBlockInfo(block *model.Block) error {
 	magicNumber, err := bs.readMagicNumber()
 	if err != nil {
-		return errors.Err(err)
+		return err
 	}
 	blockSize, _, err := bs.readUint32()
 	if err != nil {
-		return errors.Err(err)
+		return err
 	}
 
 	header, err := bs.readBytes(112)
 	if err != nil {
-		return errors.Err(err)
+		return err
 	}
 
 	block.Header = header
@@ -102,7 +103,7 @@ func (bs *blockStream) setBlockInfo(block *model.Block) error {
 
 	txCnt, _, err := bs.readCompactSize()
 	if err != nil {
-		return errors.Err(err)
+		return err
 	}
 	block.TxCnt = int(txCnt)
 
@@ -128,7 +129,7 @@ func (bs *blockStream) tell() (int64, error) {
 
 	offset, err := bs.Seek(0, io.SeekCurrent)
 	if err != nil {
-		return 0, errors.Err(err)
+		return 0, err
 	}
 	return offset, nil
 }
@@ -137,7 +138,12 @@ func (bs *blockStream) Seek(offset int64, whence int) (int64, error) {
 	if bs.data != nil {
 		return 0, nil
 	}
-	return bs.file.Seek(offset, whence)
+
+	ret, err := bs.file.Seek(offset, whence)
+	if err != nil {
+		return ret, errors.WithStack(err)
+	}
+	return ret, nil
 }
 
 func (bs *blockStream) Read(p []byte) (n int, err error) {
@@ -146,7 +152,7 @@ func (bs *blockStream) Read(p []byte) (n int, err error) {
 	}
 	read, err := bs.file.Read(p)
 	bs.offset += int64(read)
-	return read, errors.Err(err)
+	return read, errors.WithStack(err)
 }
 
 func (bs *blockStream) readCompactSize() (uint64, []byte, error) {
@@ -154,7 +160,7 @@ func (bs *blockStream) readCompactSize() (uint64, []byte, error) {
 	bSize := make([]byte, 1)
 	_, err := bs.Read(bSize)
 	if err != nil {
-		return 0, nil, errors.Err(err)
+		return 0, nil, err
 	}
 	readBuf = append(readBuf, bSize...)
 
@@ -167,7 +173,7 @@ func (bs *blockStream) readCompactSize() (uint64, []byte, error) {
 		buf := make([]byte, 2)
 		_, err := bs.Read(buf)
 		if err != nil {
-			return 0, nil, errors.Err(err)
+			return 0, nil, err
 		}
 		readBuf = append(readBuf, buf...)
 
@@ -188,7 +194,7 @@ func (bs *blockStream) readCompactSize() (uint64, []byte, error) {
 		return binary.LittleEndian.Uint64(buf), readBuf, nil
 	}
 
-	return 0, nil, errors.Err("size is greater than 255")
+	return 0, nil, errors.New("size is greater than 255")
 }
 
 func (bs *blockStream) setTransactions(block *model.Block) ([]model.Transaction, error) {
@@ -307,7 +313,7 @@ func (bs *blockStream) setTransactions(block *model.Block) ([]model.Transaction,
 
 		//err = storage.DB.Exec(`INSERT INTO transactions VALUES ?`, &tx)
 		//if err != nil {
-		//	return nil, errors.Err(err)
+		//	return nil, errors.WithStack(err)
 		//}
 
 		transactions = append(transactions, tx)
@@ -392,16 +398,13 @@ func (bs *blockStream) setOutputs(tx *model.Transaction, txBytes []byte) ([]byte
 			out.Address = model.Address{Encoded: address}
 			out.PKScript = scriptBytes
 			out.ScriptType = scriptType
-		} else if pk.Class() == txscript.NonStandardTy {
+		} else {
 			if lbrycrd.IsClaimScript(scriptBytes) {
 				txscript.NewScriptBuilder()
 				if lbrycrd.IsClaimNameScript(scriptBytes) {
-					name, _, pkscript, err := lbrycrd.ParseClaimNameScript(scriptBytes)
+					_, _, pkscript, err := lbrycrd.ParseClaimNameScript(scriptBytes)
 					if err != nil {
 						return nil, nil, err
-					}
-					if false {
-						println("Name: ", name)
 					}
 					/*_, err = stake.DecodeClaimBytes(value, "lbrycrd_main")
 					if err != nil {
@@ -416,7 +419,7 @@ func (bs *blockStream) setOutputs(tx *model.Transaction, txBytes []byte) ([]byte
 					//println(helper.Claim.String())
 					//err = storage.DB.Exec(`INSERT INTO claims VALUES ?`, &helper.Claim)
 					//if err != nil {
-					//	return nil, nil, errors.Err(err)
+					//	return nil, nil, errors.WithStack(err)
 					//}
 				}
 			} else if lbrycrd.IsPurchaseScript(scriptBytes) {
@@ -444,7 +447,7 @@ func (bs *blockStream) readBytes(toRead int) ([]byte, error) {
 	buf := make([]byte, toRead)
 	_, err := bs.Read(buf)
 	if err != nil {
-		return nil, errors.Err(err)
+		return nil, err
 	}
 	return buf, nil
 }
@@ -475,7 +478,7 @@ func (bs *blockStream) readMagicNumber() ([]byte, error) {
 func (bs *blockStream) readUint64() (uint64, []byte, error) {
 	buf, err := bs.readBytes(8)
 	if err != nil {
-		return 0, nil, errors.Err(err)
+		return 0, nil, err
 	}
 	return binary.LittleEndian.Uint64(buf), buf, nil
 }
@@ -483,7 +486,7 @@ func (bs *blockStream) readUint64() (uint64, []byte, error) {
 func (bs *blockStream) readUint32() (uint32, []byte, error) {
 	buf, err := bs.readBytes(4)
 	if err != nil {
-		return 0, nil, errors.Err(err)
+		return 0, nil, err
 	}
 	return binary.LittleEndian.Uint32(buf), buf, nil
 }
@@ -491,7 +494,7 @@ func (bs *blockStream) readUint32() (uint32, []byte, error) {
 func (bs *blockStream) readUint32R() (uint32, []byte, error) {
 	buf, err := bs.readBytes(4)
 	if err != nil {
-		return 0, nil, errors.Err(err)
+		return 0, nil, err
 	}
 	return binary.LittleEndian.Uint32(util.ReverseBytes(buf)), buf, nil
 }
@@ -499,7 +502,7 @@ func (bs *blockStream) readUint32R() (uint32, []byte, error) {
 func (bs *blockStream) readUint8() (uint8, []byte, error) {
 	buf, err := bs.readBytes(1)
 	if err != nil {
-		return 0, nil, errors.Err(err)
+		return 0, nil, err
 	}
 	return buf[0], buf, nil
 }
@@ -510,7 +513,7 @@ func (bs *blockStream) readBool() (bool, []byte, error) {
 		return false, nil, err
 	}
 	if v > 1 {
-		return false, nil, errors.Err("meant to parse boolean but found byte greater than 1")
+		return false, nil, errors.WithStack(errors.New("meant to parse boolean but found byte greater than 1"))
 	}
 	if v == 0 {
 		return false, buf, nil

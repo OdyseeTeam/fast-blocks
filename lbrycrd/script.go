@@ -3,14 +3,14 @@ package lbrycrd
 import (
 	"encoding/binary"
 	"encoding/hex"
-	"fast-blocks/util"
-	"github.com/golang/protobuf/proto"
 
-	"github.com/lbryio/lbry.go/v2/extras/errors"
+	"github.com/OdyseeTeam/fast-blocks/util"
 
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcd/txscript"
 	"github.com/btcsuite/btcutil"
+	"github.com/cockroachdb/errors"
+	"github.com/golang/protobuf/proto"
 	pb "github.com/lbryio/types/v2/go"
 	log "github.com/sirupsen/logrus"
 )
@@ -88,7 +88,7 @@ func init() {
 func GetChainParams() (*chaincfg.Params, error) {
 	chainParams, ok := paramsMap[lbrycrdMain]
 	if !ok {
-		return nil, errors.Err("unknown chain name %s", lbrycrdMain)
+		return nil, errors.Newf("unknown chain name %s", lbrycrdMain)
 	}
 
 	return &chainParams, nil
@@ -147,7 +147,7 @@ func ParseClaimNameScript(script []byte) (name string, value []byte, pubkeyscrip
 		nameBytesToRead = int(script[2])
 		nameStart = 3
 	} else if nameBytesToRead > opPushdata1 {
-		panic(errors.Base("Bytes to read is more than next byte! "))
+		panic(errors.New("Bytes to read is more than next byte! "))
 	}
 	nameEnd := nameStart + nameBytesToRead
 	name = string(script[nameStart:nameEnd])
@@ -184,7 +184,7 @@ func ParseClaimSupportScript(script []byte) (name string, claimid string, pubkey
 		nameBytesToRead = int(script[2])
 		nameStart = 3
 	} else if nameBytesToRead > opPushdata1 {
-		err = errors.Err("Bytes to read is more than next byte! ")
+		err = errors.New("bytes to read is more than next byte")
 		return
 	}
 	nameEnd := nameStart + nameBytesToRead
@@ -214,7 +214,7 @@ func ParseClaimUpdateScript(script []byte) (name string, claimid string, value [
 		nameBytesToRead = int(script[2])
 		nameStart = 3
 	} else if nameBytesToRead > opPushdata1 {
-		err = errors.Err("ParseClaimUpdateScript: Bytes to read is more than next byte! ")
+		err = errors.New("ParseClaimUpdateScript: Bytes to read is more than next byte! ")
 		return
 	}
 	nameEnd := nameStart + nameBytesToRead
@@ -252,7 +252,7 @@ func ParseClaimUpdateScript(script []byte) (name string, claimid string, value [
 }
 
 //ErrNotClaimScript is a base error for when a script cannot be parsed as a claim script.
-var ErrNotClaimScript = errors.Base("Script is not a claim script!")
+var ErrNotClaimScript = errors.New("Script is not a claim script!")
 
 // GetPubKeyScriptFromClaimPKS gets the public key script at the end of a claim script.
 func GetPubKeyScriptFromClaimPKS(script []byte) (pubkeyscript []byte, err error) {
@@ -260,7 +260,7 @@ func GetPubKeyScriptFromClaimPKS(script []byte) (pubkeyscript []byte, err error)
 		if IsClaimNameScript(script) {
 			_, _, pubkeyscript, err = ParseClaimNameScript(script)
 			if err != nil {
-				return nil, errors.Err(err)
+				return nil, err
 			}
 			return pubkeyscript, nil
 		} else if IsClaimUpdateScript(script) {
@@ -342,7 +342,7 @@ func getAddressFromP2PK(hexstring string) (string, error) {
 	}
 	chainParams, err := GetChainParams()
 	if err != nil {
-		return "", errors.Err(err)
+		return "", err
 	}
 	addr, err := btcutil.NewAddressPubKey(hexstringBytes, chainParams)
 	if err != nil {
@@ -360,7 +360,7 @@ func getAddressFromP2PKH(hexstring string) (string, error) {
 	}
 	chainParams, err := GetChainParams()
 	if err != nil {
-		return "", errors.Err(err)
+		return "", err
 	}
 	addr, err := btcutil.NewAddressPubKeyHash(hexstringBytes, chainParams)
 	if err != nil {
@@ -379,7 +379,7 @@ func getAddressFromP2SH(hexstring string) (string, error) {
 
 	chainParams, err := GetChainParams()
 	if err != nil {
-		return "", errors.Err(err)
+		return "", err
 	}
 	addr, err := btcutil.NewAddressScriptHashFromHash(hexstringBytes, chainParams)
 	if err != nil {
@@ -397,7 +397,7 @@ func getAddressFromP2WPKH(hexstring string) (string, error) {
 
 	chainParams, err := GetChainParams()
 	if err != nil {
-		return "", errors.Err(err)
+		return "", err
 	}
 	addr, err := btcutil.NewAddressWitnessPubKeyHash(witnessProgram, chainParams)
 	if err != nil {
@@ -415,7 +415,7 @@ func getAddressFromP2WSH(hexstring string) (string, error) {
 
 	chainParams, err := GetChainParams()
 	if err != nil {
-		return "", errors.Err(err)
+		return "", err
 	}
 	addr, err := btcutil.NewAddressWitnessScriptHash(witnessProgram, chainParams)
 	if err != nil {
@@ -428,14 +428,14 @@ func getAddressFromP2WSH(hexstring string) (string, error) {
 func parseDataScript(script []byte) ([]byte, error) {
 	// OP_RETURN (bytes) DATA
 	if len(script) <= 1 {
-		return nil, errors.Err("there is no script to parse")
+		return nil, errors.New("there is no script to parse")
 	}
 	if script[0] != opReturn {
-		return nil, errors.Err("the first byte of script must be an OP_RETURN to quality as un-spendable data")
+		return nil, errors.New("the first byte of script must be an OP_RETURN to quality as un-spendable data")
 	}
 	dataBytesToRead := int(script[1])
 	if (len(script) - dataBytesToRead - 2) != 0 {
-		return nil, errors.Err("supposed to have %d bytes to read but the script is %d bytes", dataBytesToRead, len(script))
+		return nil, errors.Newf("supposed to have %d bytes to read but the script is %d bytes", dataBytesToRead, len(script))
 	}
 	return script[2:], nil
 }
@@ -447,12 +447,12 @@ func ParsePurchaseScript(script []byte) (*pb.Purchase, error) {
 		return nil, err
 	}
 	if data[0] != purchase {
-		return nil, errors.Err("the first byte must be 'P'(0x50) to be a purchase script")
+		return nil, errors.New("the first byte must be 'P'(0x50) to be a purchase script")
 	}
 	purchase := &pb.Purchase{}
 	err = proto.Unmarshal(data[1:], purchase)
 	if err != nil {
-		return nil, errors.Err(err)
+		return nil, errors.WithStack(err)
 	}
 	return purchase, nil
 }

@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
+
 	"golang.org/x/crypto/ripemd160"
 )
 

@@ -1,6 +1,6 @@
 package model
 
-import "fast-blocks/blockchain/script"
+import "github.com/OdyseeTeam/fast-blocks/blockchain/script"
 
 type Input struct {
 	BlockHash       string
