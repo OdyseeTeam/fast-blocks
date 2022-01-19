@@ -2,6 +2,7 @@ package stream
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
 	"io"
@@ -10,14 +11,13 @@ import (
 
 	"github.com/OdyseeTeam/fast-blocks/blockchain/model"
 	"github.com/OdyseeTeam/fast-blocks/lbrycrd"
-	"github.com/OdyseeTeam/fast-blocks/util"
+	"github.com/cockroachdb/errors"
+	"github.com/lbryio/lbcd/chaincfg"
 	"github.com/lbryio/lbcd/chaincfg/chainhash"
 	"github.com/lbryio/lbcd/txscript"
-
-	"github.com/cockroachdb/errors"
+	"github.com/sirupsen/logrus"
+	"golang.org/x/crypto/ripemd160"
 )
-
-const CoinbaseRef = "Coinbase"
 
 type Blocks interface {
 	NextBlock() (*model.Block, error)
@@ -98,14 +98,15 @@ func (bs *blockStream) setBlockInfo(block *model.Block) error {
 	block.MagicNumber = magicNumber
 	block.BlockSize = blockSize
 
-	prevBlockHash, err := chainhash.NewHash(util.ReverseBytes(header[4:36]))
+	prevBlockHash, err := chainhash.NewHash(ReverseBytes(header[4:36]))
 	if err != nil {
 		return err
 	}
 
-	block.BlockHash = chainhash.DoubleHashH(header)
+	blockHash := chainhash.DoubleHashH(header)
+	block.BlockHash = &blockHash
 	block.Version = binary.LittleEndian.Uint32(header[0:4])
-	block.PrevBlockHash = *prevBlockHash
+	block.PrevBlockHash = prevBlockHash
 	block.MerkleRoot = header[36:68]
 	block.ClaimTrieRoot = header[68:100]
 	block.TimeStamp = time.Unix(int64(binary.LittleEndian.Uint32(header[100:104])), 0)
@@ -204,6 +205,7 @@ func (bs *blockStream) readCompactSize() (uint64, []byte, error) {
 func (bs *blockStream) setTransactions(block *model.Block) ([]model.Transaction, error) {
 	var err error
 	var transactions []model.Transaction
+
 	for i := 0; i < block.TxCnt; i++ {
 		var outputs []model.Output
 		var inputs []model.Input
@@ -292,7 +294,8 @@ func (bs *blockStream) setTransactions(block *model.Block) ([]model.Transaction,
 		}
 		txBytes = append(txBytes, buf...)
 
-		tx.Hash = chainhash.DoubleHashH(txBytes)
+		txHash := chainhash.DoubleHashH(txBytes)
+		tx.Hash = &txHash
 		tx.BlockHash = block.BlockHash
 		for _, out := range outputs {
 			out.TransactionHash = tx.Hash
@@ -337,10 +340,7 @@ func (bs *blockStream) setInputs(tx *model.Transaction, txBytes []byte) ([]byte,
 			return nil, nil, err
 		}
 		txBytes = append(txBytes, buf...)
-		in.TxRef = CoinbaseRef
-		if !isCoinbaseInput(buf) {
-			in.TxRef = hex.EncodeToString(util.ReverseBytes(buf))
-		}
+		in.TxRef, _ = chainhash.NewHash(buf)
 
 		in.Position, buf, err = bs.readUint32()
 		if err != nil {
@@ -395,53 +395,36 @@ func (bs *blockStream) setOutputs(tx *model.Transaction, txBytes []byte) ([]byte
 			return nil, nil, err
 		}
 		txBytes = append(txBytes, scriptBytes...)
-		pk, _ := txscript.ParsePkScript(scriptBytes)
-		scriptType := lbrycrd.GetPublicKeyScriptType(scriptBytes)
-		if pk.Class() != txscript.NonStandardTy {
-			address := lbrycrd.GetAddressFromPublicKeyScript(scriptBytes)
-			out.Address = model.Address{Encoded: address}
-			out.PKScript = scriptBytes
-			out.ScriptType = scriptType
-		} else {
-			if lbrycrd.IsClaimScript(scriptBytes) {
-				txscript.NewScriptBuilder()
-				if lbrycrd.IsClaimNameScript(scriptBytes) {
-					_, _, pkscript, err := lbrycrd.ParseClaimNameScript(scriptBytes)
-					if err != nil {
-						return nil, nil, err
-					}
-					/*_, err = stake.DecodeClaimBytes(value, "lbrycrd_main")
-					if err != nil {
-						logrus.Error(err)
-						continue
-					}*/
-					addy := lbrycrd.GetAddressFromPublicKeyScript(pkscript)
-					if err != nil {
-						return nil, nil, err
-					}
-					out.Address = model.Address{Encoded: addy}
-					//println(helper.Claim.String())
-					//err = storage.DB.Exec(`INSERT INTO claims VALUES ?`, &helper.Claim)
-					//if err != nil {
-					//	return nil, nil, errors.WithStack(err)
-					//}
-				}
+		out.PKScript = scriptBytes
+		//logrus.Traceln(txscript.DisasmString(scriptBytes))
+
+		scriptType, addresses, _, err := txscript.ExtractPkScriptAddrs(scriptBytes, &chaincfg.MainNetParams)
+		if err != nil {
+			return nil, nil, err
+		}
+		out.ScriptType = scriptType.String()
+
+		if scriptType != txscript.NonStandardTy {
+			if len(addresses) == 1 {
+				out.Address = addresses[0]
+			}
+
+			claimScript, err := txscript.ExtractClaimScript(scriptBytes)
+			if err != nil {
+				claimScript = nil
+			}
+
+			if claimScript != nil {
+				out.ClaimScript = claimScript
 			} else if lbrycrd.IsPurchaseScript(scriptBytes) {
 				purchase, err := lbrycrd.ParsePurchaseScript(scriptBytes)
 				if err != nil {
 					return nil, nil, err
 				}
-				if false {
-					println("Purchase: ", purchase.ClaimHash)
-				}
-
-			} else {
-				if false {
-					println(txscript.DisasmString(scriptBytes))
-					println("Non claim, no standard transaction")
-				}
+				logrus.Debugln("Purchase: ", purchase.ClaimHash)
 			}
 		}
+
 		outputs = append(outputs, out)
 	}
 	return txBytes, outputs, nil
@@ -500,7 +483,7 @@ func (bs *blockStream) readUint32R() (uint32, []byte, error) {
 	if err != nil {
 		return 0, nil, err
 	}
-	return binary.LittleEndian.Uint32(util.ReverseBytes(buf)), buf, nil
+	return binary.LittleEndian.Uint32(ReverseBytes(buf)), buf, nil
 }
 
 func (bs *blockStream) readUint8() (uint8, []byte, error) {
@@ -540,11 +523,49 @@ func (bs *blockStream) readString() (string, []byte, error) {
 	return string(buf), readBuf, nil
 }
 
-func isCoinbaseInput(txid []byte) bool {
+func IsCoinbaseInput(txid *chainhash.Hash) bool {
 	for _, b := range txid {
 		if b != 0 {
 			return false
 		}
 	}
 	return true
+}
+
+// ReverseBytes reverses a byte slice. useful for switching endian-ness
+func ReverseBytes(b []byte) []byte {
+	r := make([]byte, len(b))
+	for left, right := 0, len(b)-1; left < right; left, right = left+1, right-1 {
+		r[left], r[right] = b[right], b[left]
+	}
+	return r
+}
+
+func ClaimIDFromOutpoint(txid string, nout int) (string, error) {
+	// convert transaction id to byte array
+	txidBytes, err := hex.DecodeString(txid)
+	if err != nil {
+		return "", err
+	}
+
+	// reverse (make big-endian)
+	txidBytes = ReverseBytes(txidBytes)
+
+	// append nout
+	noutBytes := make([]byte, 4) // num bytes in uint32
+	binary.BigEndian.PutUint32(noutBytes, uint32(nout))
+	txidBytes = append(txidBytes, noutBytes...)
+
+	// sha256 it
+	s := sha256.New()
+	s.Write(txidBytes)
+
+	// ripemd it
+	r := ripemd160.New()
+	r.Write(s.Sum(nil))
+
+	// reverse (make little-endian)
+	res := ReverseBytes(r.Sum(nil))
+
+	return hex.EncodeToString(res), nil
 }

@@ -2,6 +2,7 @@ package loader
 
 import (
 	"io"
+	"path"
 
 	"github.com/OdyseeTeam/fast-blocks/blockchain"
 	"github.com/OdyseeTeam/fast-blocks/blockchain/model"
@@ -66,7 +67,7 @@ Files:
 			}
 
 			if height%1000 == 0 {
-				logrus.Info("Worker: ", workerNum, " Blockfile: ", blockStream.BlockFile(), ", Block: ", height, " Txs: ", block.TxCnt)
+				logrus.Infof("Worker %d: file %s, block %dk", workerNum, path.Base(blockStream.BlockFile()), height/1000)
 			}
 
 			chain.Notify(*block)

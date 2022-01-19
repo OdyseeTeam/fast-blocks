@@ -9,39 +9,12 @@ import (
 
 	"github.com/OdyseeTeam/fast-blocks/blockchain/model"
 	"github.com/OdyseeTeam/fast-blocks/blockchain/stream"
-	"github.com/lbryio/lbcd/chaincfg"
-	"github.com/lbryio/lbcd/chaincfg/chainhash"
-	"github.com/lbryio/lbcd/wire"
 
 	"github.com/cockroachdb/errors"
 	"github.com/sirupsen/logrus"
 	"github.com/syndtr/goleveldb/leveldb"
 	"github.com/syndtr/goleveldb/leveldb/util"
 )
-
-var GenesisHash = chainhash.Hash([chainhash.HashSize]byte{ // Make go vet happy.
-	0x9c, 0x89, 0x28, 0x3b, 0xa0, 0xf3, 0x22, 0x7f,
-	0x6c, 0x03, 0xb7, 0x02, 0x16, 0xb9, 0xf6, 0x65,
-	0xf0, 0x11, 0x8d, 0x5e, 0x0f, 0xa7, 0x29, 0xce,
-	0xdf, 0x4f, 0xb3, 0x4d, 0x6a, 0x34, 0xf4, 0x63,
-})
-
-// MainNetParams define the lbrycrd network. See https://github.com/lbryio/lbrycrd/blob/master/src/chainparams.cpp
-var MainNetParams = chaincfg.Params{
-	PubKeyHashAddrID: 0x55,
-	ScriptHashAddrID: 0x7a,
-	PrivateKeyID:     0x1c,
-	Bech32HRPSegwit:  "lbc",
-	//WitnessPubKeyHashAddrID: , // i cant find these in bitcoin codebase either
-	//WitnessScriptHashAddrID:,
-	GenesisHash:   &GenesisHash,
-	Name:          "mainnet",
-	Net:           wire.BitcoinNet(0xfae4aaf1),
-	DefaultPort:   "9246",
-	BIP0034Height: 1,
-	BIP0065Height: 200000,
-	BIP0066Height: 200000,
-}
 
 type client struct {
 	sync.Mutex
