@@ -6,7 +6,7 @@ import (
 
 	"github.com/OdyseeTeam/fast-blocks/util"
 
-	"github.com/btcsuite/btcd/txscript"
+	"github.com/lbryio/lbcd/txscript"
 )
 
 type HashAddressPair struct {

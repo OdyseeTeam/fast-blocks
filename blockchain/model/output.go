@@ -1,14 +1,17 @@
 package model
 
-import pb "github.com/lbryio/types/v2/go"
+import (
+	"github.com/lbryio/lbcd/chaincfg/chainhash"
+	pb "github.com/lbryio/types/v2/go"
+)
 
 type Output struct {
-	BlockHash       string
-	TransactionHash string
+	BlockHash       chainhash.Hash
+	TransactionHash chainhash.Hash
 	Amount          uint64
 	Address         Address
 	ScriptType      string
-	PKScript        []byte
+	PKScript        Script
 	Claim           *pb.Claim
 	Purchase        *pb.Purchase
 }

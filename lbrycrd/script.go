@@ -5,10 +5,10 @@ import (
 	"encoding/hex"
 
 	"github.com/OdyseeTeam/fast-blocks/util"
+	"github.com/lbryio/lbcd/chaincfg"
+	"github.com/lbryio/lbcd/txscript"
+	"github.com/lbryio/lbcutil"
 
-	"github.com/btcsuite/btcd/chaincfg"
-	"github.com/btcsuite/btcd/txscript"
-	"github.com/btcsuite/btcutil"
 	"github.com/cockroachdb/errors"
 	"github.com/golang/protobuf/proto"
 	pb "github.com/lbryio/types/v2/go"
@@ -344,7 +344,7 @@ func getAddressFromP2PK(hexstring string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	addr, err := btcutil.NewAddressPubKey(hexstringBytes, chainParams)
+	addr, err := lbcutil.NewAddressPubKey(hexstringBytes, chainParams)
 	if err != nil {
 		return "", err
 	}
@@ -362,7 +362,7 @@ func getAddressFromP2PKH(hexstring string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	addr, err := btcutil.NewAddressPubKeyHash(hexstringBytes, chainParams)
+	addr, err := lbcutil.NewAddressPubKeyHash(hexstringBytes, chainParams)
 	if err != nil {
 		return "", err
 	}
@@ -381,7 +381,7 @@ func getAddressFromP2SH(hexstring string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	addr, err := btcutil.NewAddressScriptHashFromHash(hexstringBytes, chainParams)
+	addr, err := lbcutil.NewAddressScriptHashFromHash(hexstringBytes, chainParams)
 	if err != nil {
 		return "", err
 	}
@@ -399,7 +399,7 @@ func getAddressFromP2WPKH(hexstring string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	addr, err := btcutil.NewAddressWitnessPubKeyHash(witnessProgram, chainParams)
+	addr, err := lbcutil.NewAddressWitnessPubKeyHash(witnessProgram, chainParams)
 	if err != nil {
 		return "", err
 	}
@@ -417,7 +417,7 @@ func getAddressFromP2WSH(hexstring string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	addr, err := btcutil.NewAddressWitnessScriptHash(witnessProgram, chainParams)
+	addr, err := lbcutil.NewAddressWitnessScriptHash(witnessProgram, chainParams)
 	if err != nil {
 		return "", err
 	}

@@ -1,10 +1,14 @@
 package model
 
-import "time"
+import (
+	"time"
+
+	"github.com/lbryio/lbcd/chaincfg/chainhash"
+)
 
 type Transaction struct {
-	BlockHash string
-	Hash      string
+	BlockHash chainhash.Hash
+	Hash      chainhash.Hash
 	Version   uint32
 	IsSegWit  bool
 	InputCnt  uint64

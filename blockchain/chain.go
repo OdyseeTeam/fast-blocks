@@ -1,18 +1,22 @@
 package blockchain
 
 import (
-	"os"
-	"path/filepath"
-	"regexp"
+	"encoding/binary"
+	"fmt"
+	"sort"
+	"strings"
 	"sync"
 
 	"github.com/OdyseeTeam/fast-blocks/blockchain/model"
 	"github.com/OdyseeTeam/fast-blocks/blockchain/stream"
-	"github.com/btcsuite/btcd/chaincfg"
-	"github.com/btcsuite/btcd/chaincfg/chainhash"
-	"github.com/btcsuite/btcd/wire"
+	"github.com/lbryio/lbcd/chaincfg"
+	"github.com/lbryio/lbcd/chaincfg/chainhash"
+	"github.com/lbryio/lbcd/wire"
+
 	"github.com/cockroachdb/errors"
 	"github.com/sirupsen/logrus"
+	"github.com/syndtr/goleveldb/leveldb"
+	"github.com/syndtr/goleveldb/leveldb/util"
 )
 
 var GenesisHash = chainhash.Hash([chainhash.HashSize]byte{ // Make go vet happy.
@@ -97,20 +101,16 @@ func (c *client) NextBlockFile(startingHeight int) (stream.Blocks, error) {
 	return stream.New(next, c.blockFilesGiven, startingHeight, nil)
 }
 
-var blockFileRE = regexp.MustCompile(`.+/blk[0-9]*\.dat`)
-
 func (c *client) loadBlockFiles() error {
-	var files []string
-	println(os.Getwd())
-	err := filepath.Walk(c.blocksDir, func(path string, info os.FileInfo, err error) error {
-		if !info.IsDir() && blockFileRE.MatchString(path) {
-			files = append(files, path)
-		}
-		return nil
-	})
+	files, err := blockFilesOrderedByHeight(strings.TrimSuffix(c.blocksDir, "/") + "/index")
 	if err != nil {
-		return errors.WithStack(err)
+		return err
 	}
+
+	for i := range files {
+		files[i] = strings.TrimSuffix(c.blocksDir, "/") + "/" + files[i]
+	}
+
 	c.blockFiles = files
 	return nil
 }
@@ -152,4 +152,87 @@ func (c *client) Notify(block model.Block) {
 		}
 	}
 
+}
+
+// https://bitcoin.stackexchange.com/questions/67515/format-of-a-block-keys-contents-in-bitcoinds-leveldb
+// binary.Uvarint is supposed to do this, except it doesn't.
+// And it is not the same varint as in bitcoin serialized varints.
+// this is ported from "The Undocumented Internals of The Bitcoin
+// and Ethereum Blockchains" python code
+func base128(b []byte, offset uint64) (uint64, uint64) {
+	for n := 0; ; n++ {
+		ch := int(b[offset])
+		offset++
+		n = (n << 7) | (ch & 0x7f)
+		if ch&0x80 != 128 {
+			return uint64(n), offset
+		}
+	}
+	return 0, 0
+}
+
+// blockFilesOrderedByHeight returns a slice of block files, ordered by the height of the first
+// block in the file
+func blockFilesOrderedByHeight(indexdbPath string) ([]string, error) {
+	type blockInfo struct {
+		filename    string
+		firstHeight uint64
+	}
+	var blockInfos []blockInfo
+
+	db, err := leveldb.OpenFile(indexdbPath, nil)
+	defer db.Close()
+
+	iter := db.NewIterator(util.BytesPrefix([]byte("f")), nil)
+	for iter.Next() {
+		// Remember that the contents of the returned slice should not be modified, and
+		// only valid until the next call to Next.
+		key := iter.Key()
+		value := iter.Value()
+
+		blockFileNum := binary.LittleEndian.Uint32(key[1:])
+		filename := fmt.Sprintf("blk%05d.dat", blockFileNum)
+
+		// references
+		// https://bitcoin.stackexchange.com/questions/67515/format-of-a-block-keys-contents-in-bitcoinds-leveldb
+		// https://bitcoin.stackexchange.com/q/28168/616
+		// https://github.com/bitcoin/bitcoin/blob/fcbc8bfa6d10cac4f16699d6e6e68fb6eb98acd0/src/main.h#L392
+		// https://github.com/alecalve/python-bitcoin-blockchain-parser
+
+		var (
+			offset uint64
+			//blocks      uint64
+			//size        uint64
+			//undoSize    uint64
+			firstHeight uint64
+			//lastHeight  uint64
+			//firstTime   uint64
+			//lastTime    uint64
+		)
+		_, offset = base128(value, offset)
+		_, offset = base128(value, offset)
+		_, offset = base128(value, offset)
+		firstHeight, offset = base128(value, offset)
+		//lastHeight, offset = base128(value, offset)
+		//firstTime, offset = base128(value, offset)
+		//lastTime, offset = base128(value, offset)
+
+		blockInfos = append(blockInfos, blockInfo{filename: filename, firstHeight: firstHeight})
+	}
+	iter.Release()
+
+	err = iter.Error()
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+
+	sort.Slice(blockInfos, func(i, j int) bool {
+		return blockInfos[i].firstHeight < blockInfos[j].firstHeight
+	})
+
+	filenames := make([]string, len(blockInfos))
+	for n, b := range blockInfos {
+		filenames[n] = b.filename
+	}
+	return filenames, nil
 }

@@ -9,13 +9,15 @@ import (
 	"time"
 
 	"github.com/OdyseeTeam/fast-blocks/blockchain/model"
-	"github.com/OdyseeTeam/fast-blocks/blockchain/script"
 	"github.com/OdyseeTeam/fast-blocks/lbrycrd"
 	"github.com/OdyseeTeam/fast-blocks/util"
-	"github.com/btcsuite/btcd/chaincfg/chainhash"
-	"github.com/btcsuite/btcd/txscript"
+	"github.com/lbryio/lbcd/chaincfg/chainhash"
+	"github.com/lbryio/lbcd/txscript"
+
 	"github.com/cockroachdb/errors"
 )
+
+const CoinbaseRef = "Coinbase"
 
 type Blocks interface {
 	NextBlock() (*model.Block, error)
@@ -53,7 +55,12 @@ func (bs blockStream) BlockFile() string {
 
 func (bs *blockStream) NextBlock() (*model.Block, error) {
 	block := &model.Block{Height: bs.blockNr}
+
+	// this is wrong. the blocks are not stored in order in the file
+	// use the leveldb index if you want to read the blocks in order
+	// see chain.blockFilesOrderedByHeight() for a starting point
 	bs.blockNr = bs.blockNr + 1
+
 	err := bs.setBlockInfo(block)
 	if err != nil {
 		return nil, err
@@ -64,7 +71,6 @@ func (bs *blockStream) NextBlock() (*model.Block, error) {
 		return nil, err
 	}
 	for _, t := range transactions {
-		block.TransactionHashes = append(block.TransactionHashes, t.Hash)
 		block.Transactions = append(block.Transactions, t)
 	}
 
@@ -92,11 +98,16 @@ func (bs *blockStream) setBlockInfo(block *model.Block) error {
 	block.MagicNumber = magicNumber
 	block.BlockSize = blockSize
 
-	block.BlockHash = chainhash.DoubleHashH(header).String()
+	prevBlockHash, err := chainhash.NewHash(util.ReverseBytes(header[4:36]))
+	if err != nil {
+		return err
+	}
+
+	block.BlockHash = chainhash.DoubleHashH(header)
 	block.Version = binary.LittleEndian.Uint32(header[0:4])
-	block.PrevBlockHash = hex.EncodeToString(util.ReverseBytes(header[4:36]))
-	block.MerkleRoot = hex.EncodeToString(header[36:68])
-	block.ClaimTrieRoot = hex.EncodeToString(header[68:100])
+	block.PrevBlockHash = *prevBlockHash
+	block.MerkleRoot = header[36:68]
+	block.ClaimTrieRoot = header[68:100]
 	block.TimeStamp = time.Unix(int64(binary.LittleEndian.Uint32(header[100:104])), 0)
 	block.Bits = binary.LittleEndian.Uint32(header[104:108])
 	block.Nonce = binary.LittleEndian.Uint32(header[108:112])
@@ -127,11 +138,7 @@ func (bs *blockStream) tell() (int64, error) {
 		return bs.offset, nil
 	}
 
-	offset, err := bs.Seek(0, io.SeekCurrent)
-	if err != nil {
-		return 0, err
-	}
-	return offset, nil
+	return bs.Seek(0, io.SeekCurrent)
 }
 
 func (bs *blockStream) Seek(offset int64, whence int) (int64, error) {
@@ -140,10 +147,7 @@ func (bs *blockStream) Seek(offset int64, whence int) (int64, error) {
 	}
 
 	ret, err := bs.file.Seek(offset, whence)
-	if err != nil {
-		return ret, errors.WithStack(err)
-	}
-	return ret, nil
+	return ret, errors.WithStack(err)
 }
 
 func (bs *blockStream) Read(p []byte) (n int, err error) {
@@ -288,7 +292,7 @@ func (bs *blockStream) setTransactions(block *model.Block) ([]model.Transaction,
 		}
 		txBytes = append(txBytes, buf...)
 
-		tx.Hash = chainhash.DoubleHashH(txBytes).String()
+		tx.Hash = chainhash.DoubleHashH(txBytes)
 		tx.BlockHash = block.BlockHash
 		for _, out := range outputs {
 			out.TransactionHash = tx.Hash
@@ -333,12 +337,12 @@ func (bs *blockStream) setInputs(tx *model.Transaction, txBytes []byte) ([]byte,
 			return nil, nil, err
 		}
 		txBytes = append(txBytes, buf...)
-		in.TxRef = "Coinbase"
-		if !isCoinBase(buf) {
+		in.TxRef = CoinbaseRef
+		if !isCoinbaseInput(buf) {
 			in.TxRef = hex.EncodeToString(util.ReverseBytes(buf))
 		}
 
-		in.Position, buf, err = bs.readUint32R()
+		in.Position, buf, err = bs.readUint32()
 		if err != nil {
 			return nil, nil, err
 		}
@@ -355,7 +359,7 @@ func (bs *blockStream) setInputs(tx *model.Transaction, txBytes []byte) ([]byte,
 			return nil, nil, err
 		}
 		txBytes = append(txBytes, scriptBytes...)
-		in.Script = script.ToHex(scriptBytes)
+		in.Script = scriptBytes
 
 		in.Sequence, buf, err = bs.readUint32R()
 		if err != nil {
@@ -536,7 +540,7 @@ func (bs *blockStream) readString() (string, []byte, error) {
 	return string(buf), readBuf, nil
 }
 
-func isCoinBase(txid []byte) bool {
+func isCoinbaseInput(txid []byte) bool {
 	for _, b := range txid {
 		if b != 0 {
 			return false

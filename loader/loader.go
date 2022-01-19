@@ -11,15 +11,15 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-var parallelFilesToLoad = 50
+var parallelFilesToLoad = 1
 
 var nextFileToLoad chan int
 var filesToLoad map[int]string
 
-func LoadChain(chain blockchain.Chain) error {
+func LoadChain(chain blockchain.Chain, maxHeight int) error {
 	var results = make(chan error)
 	for i := 0; i < parallelFilesToLoad; i++ {
-		go startLoadWorker(i, chain, results)
+		go worker(i, chain, maxHeight, results)
 	}
 
 	for i := 0; i < parallelFilesToLoad; i++ {
@@ -33,7 +33,7 @@ func LoadChain(chain blockchain.Chain) error {
 	return nil
 }
 
-func startLoadWorker(worker int, chain blockchain.Chain, results chan<- error) {
+func worker(workerNum int, chain blockchain.Chain, maxHeight int, results chan<- error) {
 	var err error
 	var height int
 	var fileNr int
@@ -48,7 +48,7 @@ Files:
 		for {
 			if blockStream == nil {
 				println("finished processing files :) ")
-				return // Need to go into a minitoring mode
+				return // Need to go into a monitoring mode
 			}
 
 			var block *model.Block
@@ -60,11 +60,16 @@ Files:
 				break Files
 			}
 
-			chain.Notify(*block)
 			height = block.Height
-			if height%1000 == 0 {
-				logrus.Info("Worker: ", worker, " Blockfile: ", blockStream.BlockFile(), ", Block Nr: ", height, " Txs: ", len(block.Transactions))
+			if maxHeight > 0 && height > maxHeight {
+				break Files
 			}
+
+			if height%1000 == 0 {
+				logrus.Info("Worker: ", workerNum, " Blockfile: ", blockStream.BlockFile(), ", Block: ", height, " Txs: ", block.TxCnt)
+			}
+
+			chain.Notify(*block)
 		}
 		fileNr++
 	}
