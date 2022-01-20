@@ -12,37 +12,38 @@ import (
 	"github.com/OdyseeTeam/fast-blocks/lbrycrd"
 	"github.com/OdyseeTeam/fast-blocks/loader"
 	"github.com/lbryio/lbcd/chaincfg/chainhash"
+	"github.com/lbryio/lbcd/txscript"
 	"github.com/lbryio/lbcutil"
 
 	"github.com/sirupsen/logrus"
 )
 
 func BalanceSnapshots() {
-	maxHeight := 0 // 0 = load it all
+	maxHeight := 889800 // 0 = load it all
 
 	reportBlocks := map[int]struct{}{
-		37000:   {}, // 2016 q3
-		103000:  {}, // 2016 q4
-		150900:  {}, // 2016 q1
-		200000:  {}, // 2017 q2
-		249000:  {}, // 2017 q3
-		298000:  {}, // jan 1 2018
-		347000:  {}, // apr 1 2018
-		396000:  {},
-		445000:  {},
-		495000:  {}, // dec 31 2018
-		544000:  {}, // apr 1 2019
-		593000:  {},
-		642000:  {},
-		692000:  {}, // jan 1 2020
-		741000:  {},
-		790000:  {},
-		839500:  {}, // 2020 q3
-		889500:  {}, // jan 1 2021
-		938000:  {},
-		988000:  {},
-		1038000: {},
-		1088000: {}, // jan 1 2022
+		37000:  {}, // 2016 q3
+		103000: {}, // 2016 q4
+		150900: {}, // 2016 q1
+		200000: {}, // 2017 q2
+		249000: {}, // 2017 q3
+		298000: {}, // jan 1 2018
+		347000: {}, // apr 1 2018
+		396000: {},
+		445000: {},
+		495000: {}, // dec 31 2018
+		544000: {}, // apr 1 2019
+		593000: {},
+		642000: {},
+		692000: {}, // jan 1 2020
+		741000: {},
+		790000: {},
+		839500: {}, // 2020 q3
+		889500: {}, // jan 1 2021
+		//938000:  {},
+		//988000:  {},
+		//1038000: {},
+		//1088000: {}, // jan 1 2022
 	}
 
 	chain, err := blockchain.New(blockchain.Config{BlocksDir: "/home/grin/.lbrycrd-17.3.3/blocks/"})
@@ -77,7 +78,9 @@ func BalanceSnapshots() {
 			}
 			for n, out := range tx.Outputs {
 				if out.Address == nil {
-					logrus.Errorf("no address for %s:%d", out.TransactionHash, n)
+					if out.ScriptClass != txscript.NullDataTy {
+						logrus.Errorf("no address for %s:%d", out.TransactionHash, n)
+					}
 					continue
 				}
 

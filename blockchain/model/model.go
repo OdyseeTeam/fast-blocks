@@ -66,7 +66,7 @@ type Output struct {
 	TransactionHash *chainhash.Hash
 	Amount          uint64
 	Address         lbcutil.Address
-	ScriptType      string
+	ScriptClass     txscript.ScriptClass
 	PKScript        Script
 	ClaimScript     *txscript.ClaimScript
 	Purchase        *pb.Purchase

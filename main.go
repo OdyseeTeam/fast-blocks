@@ -20,11 +20,16 @@ func main() {
 	//printStaleBlockHashes()
 
 	BalanceSnapshots()
-	//ClaimAddresses()
+	ClaimAddresses()
 }
 
 func ClaimAddresses() {
-
+	//look for addresses where sends TO them are def utility
+	//same for sends FROM
+	//
+	//parse chain, store all claim addresses and all addresses that supports were sent to (shoudl be same?)
+	//
+	//group by size and by number of txns
 }
 
 func printStaleBlockHashes() {

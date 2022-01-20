@@ -398,13 +398,13 @@ func (bs *blockStream) setOutputs(tx *model.Transaction, txBytes []byte) ([]byte
 		out.PKScript = scriptBytes
 		//logrus.Traceln(txscript.DisasmString(scriptBytes))
 
-		scriptType, addresses, _, err := txscript.ExtractPkScriptAddrs(scriptBytes, &chaincfg.MainNetParams)
+		scriptClass, addresses, _, err := txscript.ExtractPkScriptAddrs(scriptBytes, &chaincfg.MainNetParams)
 		if err != nil {
 			return nil, nil, err
 		}
-		out.ScriptType = scriptType.String()
+		out.ScriptClass = scriptClass
 
-		if scriptType != txscript.NonStandardTy {
+		if scriptClass != txscript.NonStandardTy {
 			if len(addresses) == 1 {
 				out.Address = addresses[0]
 			}
