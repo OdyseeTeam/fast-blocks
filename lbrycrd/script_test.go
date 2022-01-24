@@ -4,7 +4,7 @@ import (
 	"encoding/hex"
 	"testing"
 
-	"github.com/OdyseeTeam/fast-blocks/util"
+	"github.com/OdyseeTeam/fast-blocks/blockchain"
 )
 
 func TestPurchaseScriptParse(t *testing.T) {
@@ -22,7 +22,7 @@ func TestPurchaseScriptParse(t *testing.T) {
 		t.Fatal(err)
 	}
 	purchase.GetClaimHash()
-	bytes := util.ReverseBytes(purchase.GetClaimHash())
+	bytes := blockchain.ReverseBytes(purchase.GetClaimHash())
 	claimID := hex.EncodeToString(bytes)
 	expectedClaimID := "fc4b9f1a2d527cb45a3b390c8a67cb0c2f29fbb5"
 	if claimID != expectedClaimID {

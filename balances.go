@@ -8,9 +8,7 @@ import (
 
 	"github.com/OdyseeTeam/fast-blocks/blockchain"
 	"github.com/OdyseeTeam/fast-blocks/blockchain/model"
-	"github.com/OdyseeTeam/fast-blocks/blockchain/stream"
 	"github.com/OdyseeTeam/fast-blocks/lbrycrd"
-	"github.com/OdyseeTeam/fast-blocks/loader"
 	"github.com/lbryio/lbcd/chaincfg/chainhash"
 	"github.com/lbryio/lbcd/txscript"
 	"github.com/lbryio/lbcutil"
@@ -18,10 +16,10 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-func BalanceSnapshots() {
-	maxHeight := 889800 // 0 = load it all
+// BalanceSnapshots - set maxHeight = 0 to load it all
+func BalanceSnapshots(maxHeight int) {
 
-	reportBlocks := map[int]struct{}{
+	reportBlocks := map[uint64]struct{}{
 		37000:  {}, // 2016 q3
 		103000: {}, // 2016 q4
 		150900: {}, // 2016 q1
@@ -46,7 +44,7 @@ func BalanceSnapshots() {
 		//1088000: {}, // jan 1 2022
 	}
 
-	chain, err := blockchain.New(blockchain.Config{BlocksDir: "/home/grin/.lbrycrd-17.3.3/blocks/"})
+	chain, err := blockchain.New("/home/grin/.lbrycrd-17.3.3/blocks/")
 	if err != nil {
 		logrus.Fatalf("%+v", err)
 	}
@@ -60,21 +58,21 @@ func BalanceSnapshots() {
 	}()
 
 	chain.OnBlock(func(block model.Block) {
-		if _, ok := lbrycrd.StaleBlockHashes[block.BlockHash.String()]; ok {
+		if _, ok := lbrycrd.StaleBlockHashes[block.Header.BlockHash.String()]; ok {
 			return
 		}
 
-		logrus.Debugf("BLOCK %d (%s)", block.Height, block.BlockHash)
+		logrus.Debugf("BLOCK %d (%s)", block.Height, block.Header.BlockHash)
 		for _, tx := range block.Transactions {
 			logrus.Debugf("    TX %s", tx.Hash)
 			for _, in := range tx.Inputs {
 				// inputs spend UTXOs
-				if stream.IsCoinbaseInput(in.TxRef) {
+				if in.IsCoinbase() {
 					logrus.Debugf("        IN coinbase")
 					continue
 				}
-				logrus.Debugf("        IN  %s:%d", in.TxRef, in.Position)
-				actions <- spendOrCreate{spend: &outpoint{txid: in.TxRef, nout: int(in.Position)}}
+				logrus.Debugf("        IN  %s:%d", in.PrevTxHash, in.PrevTxIndex)
+				actions <- spendOrCreate{spend: &outpoint{txid: in.PrevTxHash, nout: int(in.PrevTxIndex)}}
 			}
 			for n, out := range tx.Outputs {
 				if out.Address == nil {
@@ -98,10 +96,7 @@ func BalanceSnapshots() {
 		}
 	})
 
-	err = loader.LoadChain(chain, maxHeight)
-	if err != nil {
-		logrus.Fatalf("%+v", err)
-	}
+	chain.Go(maxHeight)
 
 	close(actions)
 	wg.Wait()
@@ -131,7 +126,7 @@ type utxo struct {
 type spendOrCreate struct {
 	spend  *outpoint
 	create *utxo
-	print  int // HACK
+	print  uint64 // HACK
 }
 
 type UTXOMap map[chainhash.Hash][]*utxo
@@ -233,7 +228,7 @@ func getBalances(utxos UTXOMap) map[string]uint64 {
 	for _, nouts := range utxos {
 		for _, u := range nouts {
 			if u != nil {
-				balances[u.address.String()] += u.amount
+				balances[u.address.EncodeAddress()] += u.amount
 			}
 		}
 	}

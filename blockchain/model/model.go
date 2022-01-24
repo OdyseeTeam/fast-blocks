@@ -11,49 +11,57 @@ import (
 )
 
 type Transaction struct {
-	BlockHash *chainhash.Hash
-	Hash      *chainhash.Hash
-	Version   uint32
-	IsSegWit  bool
-	InputCnt  uint64
-	Inputs    []Input
-	OutputCnt uint64
-	Outputs   []Output
-	Witnesses []Witness
-	LockTime  time.Time
+	BlockHash   *chainhash.Hash
+	Hash        *chainhash.Hash
+	Version     uint32
+	IsSegWit    bool
+	InputCount  uint64
+	Inputs      []Input
+	OutputCount uint64
+	Outputs     []Output
+	Witnesses   []Witness
+	LockTime    time.Time
 }
 
-type Witness struct {
-	Bytes []byte
-}
+type Witness []byte
 
-type Block struct {
-	Header        []byte
-	MagicNumber   []byte
-	BlockSize     uint32
+type Header struct {
 	Version       uint32
 	Bits          uint32
 	Nonce         uint32
 	TimeStamp     time.Time
-	Height        int
-	FileNumber    int
 	BlockHash     *chainhash.Hash
 	PrevBlockHash *chainhash.Hash
 	MerkleRoot    []byte
 	ClaimTrieRoot []byte
-	Transactions  []Transaction
-	TxCnt         int
+}
+
+type Block struct {
+	Height       uint64
+	Size         uint32
+	Header       *Header
+	Transactions []Transaction
 }
 
 func (b Block) String() string { return "" }
 
 type Input struct {
-	BlockHash       *chainhash.Hash
-	TransactionHash *chainhash.Hash
-	TxRef           *chainhash.Hash
-	Position        uint32
-	Script          Script
-	Sequence        uint32
+	BlockHash *chainhash.Hash
+	TxHash    *chainhash.Hash
+
+	PrevTxHash  *chainhash.Hash
+	PrevTxIndex uint32
+	Script      Script
+	Sequence    uint32
+}
+
+func (i Input) IsCoinbase() bool {
+	for _, b := range i.PrevTxHash {
+		if b != 0 {
+			return false
+		}
+	}
+	return true
 }
 
 type Script []byte
@@ -64,10 +72,11 @@ func (s Script) Bytes() []byte  { return s }
 type Output struct {
 	BlockHash       *chainhash.Hash
 	TransactionHash *chainhash.Hash
-	Amount          uint64
-	Address         lbcutil.Address
-	ScriptClass     txscript.ScriptClass
-	PKScript        Script
-	ClaimScript     *txscript.ClaimScript
-	Purchase        *pb.Purchase
+
+	Amount      uint64
+	Address     lbcutil.Address
+	ScriptClass txscript.ScriptClass
+	PKScript    Script
+	ClaimScript *txscript.ClaimScript
+	Purchase    *pb.Purchase
 }

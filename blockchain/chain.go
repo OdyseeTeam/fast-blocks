@@ -3,12 +3,13 @@ package blockchain
 import (
 	"encoding/binary"
 	"fmt"
+	"io"
+	"path"
 	"sort"
 	"strings"
 	"sync"
 
 	"github.com/OdyseeTeam/fast-blocks/blockchain/model"
-	"github.com/OdyseeTeam/fast-blocks/blockchain/stream"
 
 	"github.com/cockroachdb/errors"
 	"github.com/sirupsen/logrus"
@@ -16,13 +17,11 @@ import (
 	"github.com/syndtr/goleveldb/leveldb/util"
 )
 
-type client struct {
-	sync.Mutex
-	blockFilesFound bool
-	blockFilesGiven int
-	blocksDir       string
-	blockFile       string
-	blockFiles      []string
+type Chain struct {
+	ParallelFilesToLoad int
+
+	blockFilesMu sync.Mutex
+	blockFiles   []blockAndHeight
 
 	onBlockFn       func(block model.Block)
 	onTransactionFn func(transaction model.Transaction)
@@ -30,81 +29,52 @@ type client struct {
 	onOutputFn      func(output model.Output)
 }
 
-type Chain interface {
-	NextBlockFile(startingHeight int) (stream.Blocks, error)
-	OnBlock(func(block model.Block))
-	OnTransaction(func(transaction model.Transaction))
-	OnInput(func(input model.Input))
-	OnOutput(func(output model.Output))
-	Notify(block model.Block)
-}
-
-type Config struct {
-	BlocksDir string
-	BlockFile string
-}
-
-func New(config Config) (Chain, error) {
-	chain := &client{blocksDir: config.BlocksDir, blockFile: config.BlockFile}
-	err := chain.loadBlockFiles()
+func New(dir string) (*Chain, error) {
+	chain := &Chain{ParallelFilesToLoad: 1}
+	err := chain.loadBlockFiles(dir)
 	if err != nil {
 		return nil, err
 	}
 	return chain, nil
 }
 
-func (c *client) NextBlockFile(startingHeight int) (stream.Blocks, error) {
+func (c *Chain) loadBlockFiles(dir string) error {
+	var err error
+	c.blockFiles, err = blockFilesOrderedByHeight(dir)
+	return err
+}
+
+func (c *Chain) nextBlockFile() (*BlockFile, error) {
 	if len(c.blockFiles) == 0 {
 		return nil, nil
 	}
-	if c.blockFile != "" {
-		for _, file := range c.blockFiles {
-			if file == c.blockFile {
-				c.blockFiles = []string{}
-				return stream.New(file, c.blockFilesGiven, startingHeight, nil)
-			}
-		}
-	}
-	c.Lock()
-	defer c.Unlock()
+
+	c.blockFilesMu.Lock()
+	defer c.blockFilesMu.Unlock()
+
 	next := c.blockFiles[0]
 	c.blockFiles = c.blockFiles[1:]
-	logrus.Info("Starting block file: ", next)
-	c.blockFilesGiven++
-	return stream.New(next, c.blockFilesGiven, startingHeight, nil)
+	logrus.Infof("Starting block file %s", next.filename)
+	return NewBlockFile(next)
 }
 
-func (c *client) loadBlockFiles() error {
-	files, err := blockFilesOrderedByHeight(strings.TrimSuffix(c.blocksDir, "/") + "/index")
-	if err != nil {
-		return err
-	}
-
-	for i := range files {
-		files[i] = strings.TrimSuffix(c.blocksDir, "/") + "/" + files[i]
-	}
-
-	c.blockFiles = files
-	return nil
-}
-
-func (c *client) OnBlock(fn func(model.Block)) {
+func (c *Chain) OnBlock(fn func(model.Block)) {
 	c.onBlockFn = fn
 }
 
-func (c *client) OnTransaction(fn func(model.Transaction)) {
+func (c *Chain) OnTransaction(fn func(model.Transaction)) {
 	c.onTransactionFn = fn
 }
 
-func (c *client) OnInput(fn func(model.Input)) {
+func (c *Chain) OnInput(fn func(model.Input)) {
 	c.onInputFn = fn
 }
 
-func (c *client) OnOutput(fn func(model.Output)) {
+func (c *Chain) OnOutput(fn func(model.Output)) {
 	c.onOutputFn = fn
 }
 
-func (c *client) Notify(block model.Block) {
+func (c *Chain) notify(block model.Block) {
 	if c.onBlockFn != nil {
 		c.onBlockFn(block)
 	}
@@ -127,6 +97,56 @@ func (c *client) Notify(block model.Block) {
 
 }
 
+//Go reads the block data and passes it to the appropriate on* functions
+func (c *Chain) Go(maxHeight int) {
+	wg := sync.WaitGroup{}
+	wg.Add(c.ParallelFilesToLoad)
+	for i := 0; i < c.ParallelFilesToLoad; i++ {
+		go func() {
+			c.worker(i, uint64(maxHeight))
+			wg.Done()
+		}()
+	}
+	wg.Wait()
+}
+
+func (c *Chain) worker(workerNum int, maxHeight uint64) {
+	for {
+		blockStream, err := c.nextBlockFile()
+		if err != nil {
+			logrus.Fatal(err) // TODO: handle this better. tho tbh, refactor blockstream would be better
+			return
+		}
+
+		blockCount := blockStream.firstHeight // blocks are not strictly in order but this is close enough
+		for {
+			if blockStream == nil {
+				return
+			}
+
+			block, err := blockStream.NextBlock()
+			if err != nil {
+				if errors.Is(err, io.EOF) {
+					break
+				}
+				logrus.Fatalf("block %d: %+v", blockCount, err) // TODO: handle this better. tho tbh, refactor blockstream would be better
+				return
+			}
+
+			if maxHeight > 0 && blockCount > maxHeight {
+				return
+			}
+
+			if blockCount%1000 == 0 {
+				logrus.Infof("Worker %d: file %s, block %dk", workerNum, path.Base(blockStream.Filename()), blockCount/1000)
+			}
+
+			c.notify(*block)
+			blockCount++
+		}
+	}
+}
+
 // https://bitcoin.stackexchange.com/questions/67515/format-of-a-block-keys-contents-in-bitcoinds-leveldb
 // binary.Uvarint is supposed to do this, except it doesn't.
 // And it is not the same varint as in bitcoin serialized varints.
@@ -144,16 +164,19 @@ func base128(b []byte, offset uint64) (uint64, uint64) {
 	return 0, 0
 }
 
+type blockAndHeight struct {
+	filename    string
+	firstHeight uint64
+}
+
 // blockFilesOrderedByHeight returns a slice of block files, ordered by the height of the first
 // block in the file
-func blockFilesOrderedByHeight(indexdbPath string) ([]string, error) {
-	type blockInfo struct {
-		filename    string
-		firstHeight uint64
-	}
-	var blockInfos []blockInfo
+func blockFilesOrderedByHeight(blocksDir string) ([]blockAndHeight, error) {
+	var blockFiles []blockAndHeight
 
-	db, err := leveldb.OpenFile(indexdbPath, nil)
+	blocksDir = strings.TrimSuffix(blocksDir, "/")
+
+	db, err := leveldb.OpenFile(blocksDir+"/index", nil)
 	defer db.Close()
 
 	iter := db.NewIterator(util.BytesPrefix([]byte("f")), nil)
@@ -190,22 +213,21 @@ func blockFilesOrderedByHeight(indexdbPath string) ([]string, error) {
 		//firstTime, offset = base128(value, offset)
 		//lastTime, offset = base128(value, offset)
 
-		blockInfos = append(blockInfos, blockInfo{filename: filename, firstHeight: firstHeight})
+		blockFiles = append(blockFiles, blockAndHeight{
+			filename:    blocksDir + "/" + filename,
+			firstHeight: firstHeight,
+		})
 	}
 	iter.Release()
 
 	err = iter.Error()
 	if err != nil {
-		return nil, errors.WithStack(err)
+		return nil, errors.Wrap(err, "")
 	}
 
-	sort.Slice(blockInfos, func(i, j int) bool {
-		return blockInfos[i].firstHeight < blockInfos[j].firstHeight
+	sort.Slice(blockFiles, func(i, j int) bool {
+		return blockFiles[i].firstHeight < blockFiles[j].firstHeight
 	})
 
-	filenames := make([]string, len(blockInfos))
-	for n, b := range blockInfos {
-		filenames[n] = b.filename
-	}
-	return filenames, nil
+	return blockFiles, nil
 }
