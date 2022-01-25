@@ -19,8 +19,6 @@ import (
 	"golang.org/x/crypto/ripemd160"
 )
 
-var magicNumberConst = []byte{250, 228, 170, 241}
-
 type BlockFile struct {
 	filename    string
 	firstHeight uint64
@@ -53,45 +51,57 @@ func (bf *BlockFile) Offset() int64 {
 }
 
 func (bf *BlockFile) NextBlock() (*model.Block, error) {
-	var err error
-
 	if bf.currHeight == 0 {
 		bf.currHeight = bf.firstHeight
 	}
 
-	// this is wrong. the blocks are not stored in order in the file
-	// use the leveldb index if you want to read the blocks in order
-	// see chain.blockFilesOrderedByHeight() for a starting point
-	block := &model.Block{Height: bf.currHeight}
-	bf.currHeight++
-
-	magicNumber, err := readMagicNumber(bf.file)
+	err := consumeUntilNextBlock(bf.file)
 	if err != nil {
 		return nil, errors.WithMessagef(err, "file %s, offset %d", bf.filename, bf.Offset())
 	}
 
-	for i := range magicNumber {
-		if magicNumberConst[i] != magicNumber[i] {
-			return nil, errors.New("failed to get constant magic number")
-		}
-	}
-
-	block.Size, err = readUint32(bf.file)
+	blockSize, err := readUint32(bf.file)
 	if err != nil {
 		return nil, err
 	}
 
-	block.Header, err = readHeader(bf.file)
+	startOffset := bf.Offset()
+
+	block, err := readBlock(bf.file)
 	if err != nil {
 		return nil, err
 	}
 
-	txCnt, err := readCompactSize(bf.file)
+	bytesRead := bf.Offset() - startOffset
+	if bytesRead != int64(blockSize) {
+		return nil, errors.Newf("expected block size to be %d, but read %d bytes", blockSize, bytesRead)
+	}
+
+	// TODO: this is wrong. the blocks are not stored in order in the file
+	// use the leveldb index if you want to read the blocks in order
+	// see chain.blockFilesOrderedByHeight() for a starting point
+	block.Size = blockSize
+	block.Height = bf.currHeight
+	bf.currHeight++
+
+	return block, nil
+}
+
+func readBlock(r io.Reader) (*model.Block, error) {
+	var err error
+	block := &model.Block{}
+
+	block.Header, err = readHeader(r)
 	if err != nil {
 		return nil, err
 	}
 
-	block.Transactions, err = bf.getTransactions(bf.file, int(txCnt), block.Header.BlockHash)
+	txCnt, err := readCompactSize(r)
+	if err != nil {
+		return nil, err
+	}
+
+	block.Transactions, err = readTransactions(r, int(txCnt))
 	if err != nil {
 		return nil, err
 	}
@@ -99,7 +109,7 @@ func (bf *BlockFile) NextBlock() (*model.Block, error) {
 	return block, nil
 }
 
-func (bf *BlockFile) getTransactions(r io.Reader, txCount int, blockHash *chainhash.Hash) ([]model.Transaction, error) {
+func readTransactions(r io.Reader, txCount int) ([]model.Transaction, error) {
 	var err error
 	transactions := make([]model.Transaction, txCount)
 
@@ -110,7 +120,6 @@ func (bf *BlockFile) getTransactions(r io.Reader, txCount int, blockHash *chainh
 
 	for i := 0; i < txCount; i++ {
 		tx := model.Transaction{}
-		tx.BlockHash = blockHash
 
 		txBytes.Reset()
 		txReader := io.TeeReader(r, txBytes)
@@ -154,7 +163,7 @@ func (bf *BlockFile) getTransactions(r io.Reader, txCount int, blockHash *chainh
 			}
 		}
 
-		inputs, err := readInputs(txReader, int(tx.InputCount))
+		tx.Inputs, err = readInputs(txReader, int(tx.InputCount))
 		if err != nil {
 			return nil, err
 		}
@@ -164,7 +173,7 @@ func (bf *BlockFile) getTransactions(r io.Reader, txCount int, blockHash *chainh
 			return nil, err
 		}
 
-		outputs, err := readOutputs(txReader, int(tx.OutputCount))
+		tx.Outputs, err = readOutputs(txReader, int(tx.OutputCount))
 		if err != nil {
 			return nil, err
 		}
@@ -202,18 +211,9 @@ func (bf *BlockFile) getTransactions(r io.Reader, txCount int, blockHash *chainh
 
 		txHash := chainhash.DoubleHashH(txBytes.Bytes())
 		tx.Hash = &txHash
-		tx.Inputs = inputs
-		for _, in := range inputs {
-			in.TxHash = tx.Hash
-			in.BlockHash = blockHash
-		}
-		tx.Outputs = outputs
-		for _, out := range outputs {
-			out.TransactionHash = tx.Hash
-			out.BlockHash = blockHash
-		}
 		transactions[i] = tx
 	}
+
 	return transactions, nil
 }
 
@@ -392,29 +392,51 @@ func writeVarInt(w io.Writer, v uint64) error {
 	}
 }
 
-func readMagicNumber(r io.Reader) ([]byte, error) {
-	var pos = 0
-	for pos < 4 {
-		b, err := readByte(r)
+// https://learnmeabitcoin.com/technical/magic-bytes
+var magicBytes = []byte{0xfa, 0xe4, 0xaa, 0xf1}
+
+// consumeUntilNextBlock consumes 0x00 bytes until it finds the next set of magic bytes
+// looks like the .blk files sometimes just have stretches of 0s in them...
+func consumeUntilNextBlock(r io.Reader) error {
+	var firstByte byte
+	var err error
+
+	b, err := read(r, len(magicBytes))
+	if err != nil {
+		return err
+	} else if bytes.Equal(b, magicBytes) {
+		// exit fast for the most common case
+		return nil
+	}
+
+	if !bytes.Equal(b, []byte{0, 0, 0, 0}) {
+		return errors.Newf("expected magic bytes %s, got %s", hex.EncodeToString(magicBytes), hex.EncodeToString(b))
+	}
+
+	// continue consuming the 0x00 bytes one by one
+	for {
+		firstByte, err = readByte(r)
 		if err != nil {
-			return nil, err
+			return err
 		}
 
-		// TODO: wtf is this? shouldnt we just read 4 bytes and compare?
-
-		if magicNumberConst[pos] == b {
-			pos++
-		} else if pos == 4 {
+		if firstByte != 0x00 {
 			break
-		} else if pos > 0 {
-			if b == magicNumberConst[0] {
-				pos = 1
-			} else {
-				pos = 0 // A, B, C, D => A, B, A, B, C, D
-			}
 		}
 	}
-	return magicNumberConst, nil
+
+	// after getting through all of the 0x00 bytes, check again for magic bytes
+	rest, err := read(r, len(magicBytes)-1)
+	if err != nil {
+		return err
+	}
+
+	if firstByte != magicBytes[0] || !bytes.Equal(magicBytes[1:], rest) {
+		return errors.Newf("expected magic bytes %s, got %s", hex.EncodeToString(magicBytes),
+			hex.EncodeToString(append([]byte{firstByte}, rest...)))
+	}
+
+	return nil
 }
 
 func readUint64(r io.Reader) (uint64, error) {

@@ -18,19 +18,15 @@ import (
 )
 
 type Chain struct {
-	ParallelFilesToLoad int
+	Workers int
 
 	blockFilesMu sync.Mutex
 	blockFiles   []blockAndHeight
-
-	onBlockFn       func(block model.Block)
-	onTransactionFn func(transaction model.Transaction)
-	onInputFn       func(input model.Input)
-	onOutputFn      func(output model.Output)
+	onBlockFn    func(block model.Block)
 }
 
 func New(dir string) (*Chain, error) {
-	chain := &Chain{ParallelFilesToLoad: 1}
+	chain := &Chain{Workers: 1}
 	err := chain.loadBlockFiles(dir)
 	if err != nil {
 		return nil, err
@@ -54,7 +50,6 @@ func (c *Chain) nextBlockFile() (*BlockFile, error) {
 
 	next := c.blockFiles[0]
 	c.blockFiles = c.blockFiles[1:]
-	logrus.Infof("Starting block file %s", next.filename)
 	return NewBlockFile(next)
 }
 
@@ -62,69 +57,58 @@ func (c *Chain) OnBlock(fn func(model.Block)) {
 	c.onBlockFn = fn
 }
 
-func (c *Chain) OnTransaction(fn func(model.Transaction)) {
-	c.onTransactionFn = fn
-}
-
-func (c *Chain) OnInput(fn func(model.Input)) {
-	c.onInputFn = fn
-}
-
-func (c *Chain) OnOutput(fn func(model.Output)) {
-	c.onOutputFn = fn
-}
-
 func (c *Chain) notify(block model.Block) {
 	if c.onBlockFn != nil {
 		c.onBlockFn(block)
 	}
-
-	for _, tx := range block.Transactions {
-		if c.onTransactionFn != nil {
-			c.onTransactionFn(tx)
-		}
-		if c.onOutputFn != nil {
-			for _, out := range tx.Outputs {
-				c.onOutputFn(out)
-			}
-		}
-		if c.onInputFn != nil {
-			for _, in := range tx.Inputs {
-				c.onInputFn(in)
-			}
-		}
-	}
-
 }
 
 //Go reads the block data and passes it to the appropriate on* functions
-func (c *Chain) Go(maxHeight int) {
-	wg := sync.WaitGroup{}
-	wg.Add(c.ParallelFilesToLoad)
-	for i := 0; i < c.ParallelFilesToLoad; i++ {
-		go func() {
-			c.worker(i, uint64(maxHeight))
-			wg.Done()
-		}()
-	}
-	wg.Wait()
-}
+func (c *Chain) Go(maxHeight int) error {
+	fileChan := make(chan *BlockFile)
 
-func (c *Chain) worker(workerNum int, maxHeight uint64) {
+	if c.Workers < 1 {
+		// could happen if you initialize an empty struct and forget to set this
+		c.Workers = 1
+	}
+	logrus.Infof("running %d workers", c.Workers)
+
+	wg := &sync.WaitGroup{}
+	wg.Add(c.Workers)
+	for i := 0; i < c.Workers; i++ {
+		go func(i int) {
+			defer wg.Done()
+			c.worker(i, fileChan)
+		}(i)
+	}
+
 	for {
-		blockStream, err := c.nextBlockFile()
+		blockFile, err := c.nextBlockFile()
 		if err != nil {
-			logrus.Fatal(err) // TODO: handle this better. tho tbh, refactor blockstream would be better
-			return
+			return err
+		}
+		if blockFile == nil {
+			break
 		}
 
-		blockCount := blockStream.firstHeight // blocks are not strictly in order but this is close enough
-		for {
-			if blockStream == nil {
-				return
-			}
+		if maxHeight > 0 && blockFile.firstHeight > uint64(maxHeight) {
+			continue
+		}
 
-			block, err := blockStream.NextBlock()
+		fileChan <- blockFile
+	}
+
+	close(fileChan)
+	wg.Wait()
+	return nil
+}
+
+func (c *Chain) worker(workerNum int, blockFileChan chan *BlockFile) {
+	for bf := range blockFileChan {
+		logrus.Infof("worker %d starting block file %s", workerNum, bf.filename)
+		blockCount := bf.firstHeight // TODO: blocks are not actually in order but this is close enough
+		for {
+			block, err := bf.NextBlock()
 			if err != nil {
 				if errors.Is(err, io.EOF) {
 					break
@@ -133,12 +117,8 @@ func (c *Chain) worker(workerNum int, maxHeight uint64) {
 				return
 			}
 
-			if maxHeight > 0 && blockCount > maxHeight {
-				return
-			}
-
-			if blockCount%1000 == 0 {
-				logrus.Infof("Worker %d: file %s, block %dk", workerNum, path.Base(blockStream.Filename()), blockCount/1000)
+			if blockCount%10000 == 0 {
+				logrus.Infof("Worker %d: file %s, block %dk", workerNum, path.Base(bf.Filename()), blockCount/1000)
 			}
 
 			c.notify(*block)

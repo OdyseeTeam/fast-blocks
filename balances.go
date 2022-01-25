@@ -77,7 +77,7 @@ func BalanceSnapshots(maxHeight int) {
 			for n, out := range tx.Outputs {
 				if out.Address == nil {
 					if out.ScriptClass != txscript.NullDataTy {
-						logrus.Errorf("no address for %s:%d", out.TransactionHash, n)
+						logrus.Errorf("no address for %s:%d", tx.Hash, n)
 					}
 					continue
 				}
@@ -96,7 +96,10 @@ func BalanceSnapshots(maxHeight int) {
 		}
 	})
 
-	chain.Go(maxHeight)
+	err = chain.Go(maxHeight)
+	if err != nil {
+		logrus.Errorf("%+v", err)
+	}
 
 	close(actions)
 	wg.Wait()

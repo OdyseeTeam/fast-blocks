@@ -11,7 +11,6 @@ import (
 )
 
 type Transaction struct {
-	BlockHash   *chainhash.Hash
 	Hash        *chainhash.Hash
 	Version     uint32
 	IsSegWit    bool
@@ -46,9 +45,6 @@ type Block struct {
 func (b Block) String() string { return "" }
 
 type Input struct {
-	BlockHash *chainhash.Hash
-	TxHash    *chainhash.Hash
-
 	PrevTxHash  *chainhash.Hash
 	PrevTxIndex uint32
 	Script      Script
@@ -70,9 +66,6 @@ func (s Script) String() string { return hex.EncodeToString(s) }
 func (s Script) Bytes() []byte  { return s }
 
 type Output struct {
-	BlockHash       *chainhash.Hash
-	TransactionHash *chainhash.Hash
-
 	Amount      uint64
 	Address     lbcutil.Address
 	ScriptClass txscript.ScriptClass
