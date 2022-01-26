@@ -9,8 +9,6 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/OdyseeTeam/fast-blocks/blockchain/model"
-
 	"github.com/cockroachdb/errors"
 	"github.com/sirupsen/logrus"
 	"github.com/syndtr/goleveldb/leveldb"
@@ -21,8 +19,8 @@ type Chain struct {
 	Workers int
 
 	blockFilesMu sync.Mutex
-	blockFiles   []blockAndHeight
-	onBlockFn    func(block model.Block)
+	blockFiles   []*BlockFile
+	onBlockFn    func(block Block)
 }
 
 func New(dir string) (*Chain, error) {
@@ -50,14 +48,14 @@ func (c *Chain) nextBlockFile() (*BlockFile, error) {
 
 	next := c.blockFiles[0]
 	c.blockFiles = c.blockFiles[1:]
-	return NewBlockFile(next)
+	return next, nil
 }
 
-func (c *Chain) OnBlock(fn func(model.Block)) {
+func (c *Chain) OnBlock(fn func(Block)) {
 	c.onBlockFn = fn
 }
 
-func (c *Chain) notify(block model.Block) {
+func (c *Chain) notify(block Block) {
 	if c.onBlockFn != nil {
 		c.onBlockFn(block)
 	}
@@ -105,7 +103,7 @@ func (c *Chain) Go(maxHeight int) error {
 
 func (c *Chain) worker(workerNum int, blockFileChan chan *BlockFile) {
 	for bf := range blockFileChan {
-		logrus.Infof("worker %d starting block file %s", workerNum, bf.filename)
+		//logrus.Infof("worker %d starting block file %s", workerNum, bf.filename)
 		blockCount := bf.firstHeight // TODO: blocks are not actually in order but this is close enough
 		for {
 			block, err := bf.NextBlock()
@@ -114,7 +112,6 @@ func (c *Chain) worker(workerNum int, blockFileChan chan *BlockFile) {
 					break
 				}
 				logrus.Fatalf("block %d: %+v", blockCount, err) // TODO: handle this better. tho tbh, refactor blockstream would be better
-				return
 			}
 
 			if blockCount%10000 == 0 {
@@ -123,6 +120,11 @@ func (c *Chain) worker(workerNum int, blockFileChan chan *BlockFile) {
 
 			c.notify(*block)
 			blockCount++
+		}
+
+		err := bf.Close()
+		if err != nil {
+			logrus.Errorf("+%v", err)
 		}
 	}
 }
@@ -144,15 +146,10 @@ func base128(b []byte, offset uint64) (uint64, uint64) {
 	return 0, 0
 }
 
-type blockAndHeight struct {
-	filename    string
-	firstHeight uint64
-}
-
 // blockFilesOrderedByHeight returns a slice of block files, ordered by the height of the first
 // block in the file
-func blockFilesOrderedByHeight(blocksDir string) ([]blockAndHeight, error) {
-	var blockFiles []blockAndHeight
+func blockFilesOrderedByHeight(blocksDir string) ([]*BlockFile, error) {
+	var blockFiles []*BlockFile
 
 	blocksDir = strings.TrimSuffix(blocksDir, "/")
 
@@ -193,7 +190,7 @@ func blockFilesOrderedByHeight(blocksDir string) ([]blockAndHeight, error) {
 		//firstTime, offset = base128(value, offset)
 		//lastTime, offset = base128(value, offset)
 
-		blockFiles = append(blockFiles, blockAndHeight{
+		blockFiles = append(blockFiles, &BlockFile{
 			filename:    blocksDir + "/" + filename,
 			firstHeight: firstHeight,
 		})

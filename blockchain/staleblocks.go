@@ -1,4 +1,4 @@
-package lbrycrd
+package blockchain
 
 import (
 	"github.com/lbryio/lbcd/chaincfg/chainhash"

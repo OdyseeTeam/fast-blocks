@@ -1,17 +1,17 @@
 package main
 
 import (
-	"encoding/hex"
+	"bufio"
 	"fmt"
 	"os"
 	"runtime"
 	"sync"
+	"time"
 
 	"github.com/OdyseeTeam/fast-blocks/blockchain"
-	"github.com/OdyseeTeam/fast-blocks/blockchain/model"
-	"github.com/OdyseeTeam/fast-blocks/lbrycrd"
 	"github.com/OdyseeTeam/fast-blocks/storage"
 	"github.com/lbryio/lbcd/txscript"
+	"github.com/lbryio/lbry.go/v3/schema/address/base58"
 	"github.com/lbryio/lbry.go/v3/schema/stake"
 	"github.com/sirupsen/logrus"
 )
@@ -27,9 +27,13 @@ func main() {
 
 	//printStaleBlockHashes()
 
-	//BalanceSnapshots(66000)
+	BalanceSnapshots(0)
 	//ClaimAddresses()
-	TimeParse()
+	//AddressesForInputs()
+
+	//TotalAddresses()
+
+	//TimeParse()
 }
 
 func TimeParse() {
@@ -37,14 +41,119 @@ func TimeParse() {
 	if err != nil {
 		logrus.Fatalf("%+v", err)
 	}
-	chain.Workers = runtime.NumCPU() - 1
+	//chain.Workers = runtime.NumCPU() - 1
 
-	chain.OnBlock(func(block model.Block) {})
+	chain.OnBlock(func(block blockchain.Block) {})
 
 	err = chain.Go(0)
 	if err != nil {
 		logrus.Errorf("%+v", err)
 	}
+
+	logrus.Printf("done")
+}
+
+func TotalAddresses() {
+	maxHeight := 0 // 0 = load it all
+
+	chain, err := blockchain.New("/home/grin/.lbrycrd-17.3.3/blocks/")
+	if err != nil {
+		logrus.Fatalf("%+v", err)
+	}
+	chain.Workers = runtime.NumCPU() - 1
+
+	addressChan := make(chan string)
+	wg := sync.WaitGroup{}
+	wg.Add(1)
+	go func() {
+		addressCollector(addressChan, nil)
+		wg.Done()
+	}()
+
+	chain.OnBlock(func(block blockchain.Block) {
+		if _, ok := blockchain.StaleBlockHashes[block.Header.BlockHash.String()]; ok {
+			return
+		}
+
+		logrus.Debugf("BLOCK %d (%s)", block.Height, block.Header.BlockHash)
+		for _, tx := range block.Transactions {
+			logrus.Debugf("    TX %s", tx.Hash)
+			for n, out := range tx.Outputs {
+				if out.Address != nil {
+					addressChan <- out.Address.EncodeAddress()
+				}
+				logrus.Debugf("        OUT %d -> %s (%d)", n, out.Address, out.Amount)
+			}
+		}
+	})
+
+	err = chain.Go(maxHeight)
+	if err != nil {
+		logrus.Errorf("%+v", err)
+	}
+
+	close(addressChan)
+	wg.Wait()
+
+	logrus.Printf("done")
+}
+
+func AddressesForInputs() {
+	maxHeight := 0 // 0 = load it all
+
+	chain, err := blockchain.New("/home/grin/.lbrycrd-17.3.3/blocks/")
+	if err != nil {
+		logrus.Fatalf("%+v", err)
+	}
+	chain.Workers = runtime.NumCPU() - 1
+
+	logrus.Infof("loading outpoints")
+	outpointList := map[string]struct{}{}
+	f, err := os.Open("consumptive_outpoints")
+	if err != nil {
+		logrus.Fatal(err)
+	}
+
+	fileScanner := bufio.NewScanner(f)
+	fileScanner.Split(bufio.ScanLines)
+	for fileScanner.Scan() {
+		outpointList[fileScanner.Text()] = struct{}{}
+	}
+	f.Close()
+	logrus.Infof("done loading outpoints")
+
+	addressChan := make(chan string)
+	wg := sync.WaitGroup{}
+	wg.Add(1)
+	go func() {
+		addressCollector(addressChan, nil)
+		wg.Done()
+	}()
+
+	chain.OnBlock(func(block blockchain.Block) {
+		if _, ok := blockchain.StaleBlockHashes[block.Header.BlockHash.String()]; ok {
+			return
+		}
+
+		logrus.Debugf("BLOCK %d (%s)", block.Height, block.Header.BlockHash)
+		for _, tx := range block.Transactions {
+			logrus.Debugf("    TX %s", tx.Hash)
+			for n, out := range tx.Outputs {
+				if _, ok := outpointList[fmt.Sprintf("%s:%d", tx.Hash, n)]; ok {
+					addressChan <- out.Address.EncodeAddress()
+				}
+				logrus.Debugf("        OUT %d -> %s (%d)", n, out.Address, out.Amount)
+			}
+		}
+	})
+
+	err = chain.Go(maxHeight)
+	if err != nil {
+		logrus.Errorf("%+v", err)
+	}
+
+	close(addressChan)
+	wg.Wait()
 
 	logrus.Printf("done")
 }
@@ -65,7 +174,7 @@ func ClaimAddresses() {
 	}
 	chain.Workers = runtime.NumCPU() - 1
 
-	addressChan := make(chan []byte)
+	addressChan := make(chan string)
 	outpointChan := make(chan outpoint)
 	wg := sync.WaitGroup{}
 	wg.Add(1)
@@ -74,8 +183,8 @@ func ClaimAddresses() {
 		wg.Done()
 	}()
 
-	chain.OnBlock(func(block model.Block) {
-		if _, ok := lbrycrd.StaleBlockHashes[block.Header.BlockHash.String()]; ok {
+	chain.OnBlock(func(block blockchain.Block) {
+		if _, ok := blockchain.StaleBlockHashes[block.Header.BlockHash.String()]; ok {
 			return
 		}
 
@@ -86,7 +195,7 @@ func ClaimAddresses() {
 			for n, out := range tx.Outputs {
 				if out.ClaimScript != nil {
 					hasConsumptiveUse = true
-					addressChan <- out.Address.ScriptAddress()
+					addressChan <- out.Address.EncodeAddress()
 
 					switch out.ClaimScript.Opcode {
 					case txscript.OP_CLAIMNAME, txscript.OP_UPDATECLAIM:
@@ -99,8 +208,8 @@ func ClaimAddresses() {
 							// don't worry about claims you can't decode. there are a bunch early in the chain
 							//logrus.Errorf("unmarshall fine but its not a claim in %s:%d", tx.Hash, n)
 							//logrus.Errorln(hex.EncodeToString(out.ClaimScript.Value))
-						} else if s := h.Claim.GetStream(); s != nil {
-							addressChan <- s.GetFee().GetAddress()
+						} else if s := h.Claim.GetStream(); s != nil && s.GetFee().GetAddress() != nil {
+							addressChan <- base58.EncodeBase58(s.GetFee().GetAddress())
 						}
 					case txscript.OP_SUPPORTCLAIM:
 					default:
@@ -134,31 +243,36 @@ func ClaimAddresses() {
 	wg.Wait()
 
 	logrus.Printf("done")
-
 }
 
-func addressCollector(addrChan chan []byte, outpointChan chan outpoint) {
+func addressCollector(addrChan chan string, outpointChan chan outpoint) {
 	addresses := make(map[string]struct{})
 	var outpoints []outpoint
 
-	closed := 0
+	toClose := 0
+	if addrChan != nil {
+		toClose++
+	}
+	if outpointChan != nil {
+		toClose++
+	}
 
 	for {
-		if closed >= 2 {
+		if toClose <= 0 {
 			break
 		}
 
 		select {
 		case a, ok := <-addrChan:
 			if !ok {
-				closed++
+				toClose--
 				addrChan = nil
 				continue
 			}
-			addresses[hex.EncodeToString(a)] = struct{}{}
+			addresses[a] = struct{}{}
 		case o, ok := <-outpointChan:
 			if !ok {
-				closed++
+				toClose--
 				outpointChan = nil
 				continue
 			}
@@ -168,31 +282,35 @@ func addressCollector(addrChan chan []byte, outpointChan chan outpoint) {
 
 	logrus.Printf("saving to file")
 
-	f, err := os.Create(fmt.Sprintf("consumptive_addresses"))
-	if err != nil {
-		logrus.Error(err)
-		return
-	}
-	defer f.Close()
-
-	for a := range addresses {
-		_, err := f.WriteString(a + "\n")
+	if len(addresses) > 0 {
+		f, err := os.Create(fmt.Sprintf("addresses_%d", time.Now().Unix()))
 		if err != nil {
-			logrus.Fatal(err)
+			logrus.Error(err)
+			return
+		}
+		defer f.Close()
+
+		for a := range addresses {
+			_, err := f.WriteString(a + "\n")
+			if err != nil {
+				logrus.Fatal(err)
+			}
 		}
 	}
 
-	f2, err := os.Create(fmt.Sprintf("consumptive_outpoints"))
-	if err != nil {
-		logrus.Error(err)
-		return
-	}
-	defer f2.Close()
-
-	for _, o := range outpoints {
-		_, err := f2.WriteString(o.String() + "\n")
+	if len(outpoints) > 0 {
+		f2, err := os.Create(fmt.Sprintf("outpoints_%d", time.Now().Unix()))
 		if err != nil {
-			logrus.Fatal(err)
+			logrus.Error(err)
+			return
+		}
+		defer f2.Close()
+
+		for _, o := range outpoints {
+			_, err := f2.WriteString(o.String() + "\n")
+			if err != nil {
+				logrus.Fatal(err)
+			}
 		}
 	}
 
@@ -200,7 +318,7 @@ func addressCollector(addrChan chan []byte, outpointChan chan outpoint) {
 }
 
 func printStaleBlockHashes() {
-	blocks, err := lbrycrd.GetStaleBlockHashes()
+	blocks, err := blockchain.GetStaleBlockHashes()
 	if err != nil {
 		logrus.Errorf("%+v", err)
 		return

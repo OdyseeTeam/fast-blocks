@@ -1,10 +1,8 @@
-package lbrycrd
+package blockchain
 
 import (
 	"encoding/hex"
 	"testing"
-
-	"github.com/OdyseeTeam/fast-blocks/blockchain"
 )
 
 func TestPurchaseScriptParse(t *testing.T) {
@@ -17,12 +15,12 @@ func TestPurchaseScriptParse(t *testing.T) {
 	if !isPurchase {
 		t.Fatal("test string no longer identifies as a purchase!")
 	}
-	purchase, err := ParsePurchaseScript(hexBytes)
+	purchase, err := parsePurchaseScript(hexBytes)
 	if err != nil {
 		t.Fatal(err)
 	}
 	purchase.GetClaimHash()
-	bytes := blockchain.ReverseBytes(purchase.GetClaimHash())
+	bytes := ReverseBytes(purchase.GetClaimHash())
 	claimID := hex.EncodeToString(bytes)
 	expectedClaimID := "fc4b9f1a2d527cb45a3b390c8a67cb0c2f29fbb5"
 	if claimID != expectedClaimID {

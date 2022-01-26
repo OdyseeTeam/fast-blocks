@@ -1,4 +1,4 @@
-package model
+package blockchain
 
 import (
 	"encoding/hex"

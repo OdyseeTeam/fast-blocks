@@ -7,8 +7,6 @@ import (
 	"sync"
 
 	"github.com/OdyseeTeam/fast-blocks/blockchain"
-	"github.com/OdyseeTeam/fast-blocks/blockchain/model"
-	"github.com/OdyseeTeam/fast-blocks/lbrycrd"
 	"github.com/lbryio/lbcd/chaincfg/chainhash"
 	"github.com/lbryio/lbcd/txscript"
 	"github.com/lbryio/lbcutil"
@@ -20,28 +18,29 @@ import (
 func BalanceSnapshots(maxHeight int) {
 
 	reportBlocks := map[uint64]struct{}{
-		37000:  {}, // 2016 q3
-		103000: {}, // 2016 q4
-		150900: {}, // 2016 q1
-		200000: {}, // 2017 q2
-		249000: {}, // 2017 q3
-		298000: {}, // jan 1 2018
-		347000: {}, // apr 1 2018
-		396000: {},
-		445000: {},
-		495000: {}, // dec 31 2018
-		544000: {}, // apr 1 2019
-		593000: {},
-		642000: {},
-		692000: {}, // jan 1 2020
-		741000: {},
-		790000: {},
-		839500: {}, // 2020 q3
-		889500: {}, // jan 1 2021
+		//37000:  {}, // 2016 q3
+		//103000: {}, // 2016 q4
+		//150900: {}, // 2016 q1
+		//200000: {}, // 2017 q2
+		//249000: {}, // 2017 q3
+		//298000: {}, // jan 1 2018
+		//347000: {}, // apr 1 2018
+		//396000: {},
+		//445000: {},
+		//495000: {}, // dec 31 2018
+		//544000: {}, // apr 1 2019
+		//593000: {},
+		//642000: {},
+		//692000: {}, // jan 1 2020
+		//741000: {},
+		//790000: {},
+		//839500: {}, // 2020 q3
+		//889500: {}, // jan 1 2021
 		//938000:  {},
 		//988000:  {},
 		//1038000: {},
 		//1088000: {}, // jan 1 2022
+		1090000: {},
 	}
 
 	chain, err := blockchain.New("/home/grin/.lbrycrd-17.3.3/blocks/")
@@ -57,8 +56,8 @@ func BalanceSnapshots(maxHeight int) {
 		wg.Done()
 	}()
 
-	chain.OnBlock(func(block model.Block) {
-		if _, ok := lbrycrd.StaleBlockHashes[block.Header.BlockHash.String()]; ok {
+	chain.OnBlock(func(block blockchain.Block) {
+		if _, ok := blockchain.StaleBlockHashes[block.Header.BlockHash.String()]; ok {
 			return
 		}
 

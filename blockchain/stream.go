@@ -9,13 +9,12 @@ import (
 	"os"
 	"time"
 
-	"github.com/OdyseeTeam/fast-blocks/blockchain/model"
-	"github.com/OdyseeTeam/fast-blocks/lbrycrd"
 	"github.com/cockroachdb/errors"
 	"github.com/lbryio/lbcd/chaincfg"
 	"github.com/lbryio/lbcd/chaincfg/chainhash"
 	"github.com/lbryio/lbcd/txscript"
 	"github.com/sirupsen/logrus"
+	"github.com/valyala/bytebufferpool"
 	"golang.org/x/crypto/ripemd160"
 )
 
@@ -23,19 +22,9 @@ type BlockFile struct {
 	filename    string
 	firstHeight uint64
 
-	file       io.ReadSeeker
+	file       *os.File
+	closed     bool
 	currHeight uint64
-}
-
-// TODO: close file after done with it
-// TODO: combine BlockFile and blockAndHeight
-
-func NewBlockFile(b blockAndHeight) (*BlockFile, error) {
-	file, err := os.OpenFile(b.filename, os.O_RDONLY, 0)
-	if err != nil {
-		return nil, errors.Wrap(err, "opening block file")
-	}
-	return &BlockFile{filename: b.filename, file: file, firstHeight: b.firstHeight}, nil
 }
 
 func (bf BlockFile) Filename() string {
@@ -50,12 +39,36 @@ func (bf *BlockFile) Offset() int64 {
 	return offset
 }
 
-func (bf *BlockFile) NextBlock() (*model.Block, error) {
+func (bf *BlockFile) Close() error {
+	if bf.closed {
+		return nil
+	}
+
+	bf.closed = true
+
+	err := bf.file.Close()
+	return errors.Wrap(err, "")
+}
+
+func (bf *BlockFile) NextBlock() (*Block, error) {
+	var err error
+
+	if bf.closed {
+		return nil, errors.New("blockfile closed")
+	}
+
+	if bf.file == nil {
+		bf.file, err = os.OpenFile(bf.filename, os.O_RDONLY, 0)
+		if err != nil {
+			return nil, errors.Wrap(err, "opening block file")
+		}
+	}
+
 	if bf.currHeight == 0 {
 		bf.currHeight = bf.firstHeight
 	}
 
-	err := consumeUntilNextBlock(bf.file)
+	err = consumeUntilNextBlock(bf.file)
 	if err != nil {
 		return nil, errors.WithMessagef(err, "file %s, offset %d", bf.filename, bf.Offset())
 	}
@@ -77,19 +90,22 @@ func (bf *BlockFile) NextBlock() (*model.Block, error) {
 		return nil, errors.Newf("expected block size to be %d, but read %d bytes", blockSize, bytesRead)
 	}
 
+	block.Size = blockSize
+
 	// TODO: this is wrong. the blocks are not stored in order in the file
 	// use the leveldb index if you want to read the blocks in order
 	// see chain.blockFilesOrderedByHeight() for a starting point
-	block.Size = blockSize
 	block.Height = bf.currHeight
 	bf.currHeight++
 
 	return block, nil
 }
 
-func readBlock(r io.Reader) (*model.Block, error) {
+func readBlock(r io.Reader) (*Block, error) {
 	var err error
-	block := &model.Block{}
+	block := &Block{}
+
+	// TODO: use lbcutil.NewBlockFromBytes
 
 	block.Header, err = readHeader(r)
 	if err != nil {
@@ -109,17 +125,17 @@ func readBlock(r io.Reader) (*model.Block, error) {
 	return block, nil
 }
 
-func readTransactions(r io.Reader, txCount int) ([]model.Transaction, error) {
+func readTransactions(r io.Reader, txCount int) ([]Transaction, error) {
 	var err error
-	transactions := make([]model.Transaction, txCount)
+	transactions := make([]Transaction, txCount)
 
 	// only useful if running many parallel threads
-	//txBytes := bytebufferpool.Get()
-	//defer bytebufferpool.Put(txBytes)
-	txBytes := new(bytes.Buffer)
+	txBytes := bytebufferpool.Get() // TODO: benchmark compare memory usage
+	defer bytebufferpool.Put(txBytes)
+	//txBytes := new(bytes.Buffer)
 
 	for i := 0; i < txCount; i++ {
-		tx := model.Transaction{}
+		tx := Transaction{}
 
 		txBytes.Reset()
 		txReader := io.TeeReader(r, txBytes)
@@ -129,7 +145,7 @@ func readTransactions(r io.Reader, txCount int) ([]model.Transaction, error) {
 			return nil, err
 		}
 
-		// reading from r instead of txreader because we don't know if we're about to
+		// reading from r instead of txReader because we don't know if we're about to
 		// read the inputCount or the segwit marker
 		// txid:   doubleSHA([nVersion][txins][txouts][nLockTime])
 		// wtxid:  doubleSHA([nVersion][marker][flag][txins][txouts][witness][nLockTime])
@@ -140,8 +156,9 @@ func readTransactions(r io.Reader, txCount int) ([]model.Transaction, error) {
 		}
 
 		if inputCountOrMarker == 0 {
-			tx.IsSegWit = true
 			// if 0 inputs, then what we actually read was the marker
+			tx.IsSegWit = true
+
 			flag, err := readByte(r)
 			if err != nil {
 				return nil, err
@@ -187,7 +204,7 @@ func readTransactions(r io.Reader, txCount int) ([]model.Transaction, error) {
 					return nil, err
 				}
 
-				tx.Witnesses = make([]model.Witness, witnessCount)
+				tx.Witnesses = make([]Witness, witnessCount)
 
 				for i := 0; i < int(witnessCount); i++ {
 					size, err := readCompactSize(r)
@@ -217,12 +234,12 @@ func readTransactions(r io.Reader, txCount int) ([]model.Transaction, error) {
 	return transactions, nil
 }
 
-func readInputs(r io.Reader, inputCount int) ([]model.Input, error) {
+func readInputs(r io.Reader, inputCount int) ([]Input, error) {
 	var err error
-	var inputs []model.Input
+	var inputs []Input
 	for i := 0; i < inputCount; i++ {
 		var buf []byte
-		in := model.Input{}
+		in := Input{}
 
 		buf, err = read(r, chainhash.HashSize)
 		if err != nil {
@@ -259,11 +276,11 @@ func readInputs(r io.Reader, inputCount int) ([]model.Input, error) {
 	return inputs, nil
 }
 
-func readOutputs(r io.Reader, outputCount int) ([]model.Output, error) {
+func readOutputs(r io.Reader, outputCount int) ([]Output, error) {
 	var err error
-	var outputs []model.Output
+	var outputs []Output
 	for i := 0; i < outputCount; i++ {
-		out := model.Output{}
+		out := Output{}
 		out.Amount, err = readUint64(r)
 		if err != nil {
 			return nil, err
@@ -299,8 +316,8 @@ func readOutputs(r io.Reader, outputCount int) ([]model.Output, error) {
 
 			if claimScript != nil {
 				out.ClaimScript = claimScript
-			} else if lbrycrd.IsPurchaseScript(scriptBytes) {
-				purchase, err := lbrycrd.ParsePurchaseScript(scriptBytes)
+			} else if IsPurchaseScript(scriptBytes) {
+				purchase, err := parsePurchaseScript(scriptBytes)
 				if err != nil {
 					return nil, err
 				}
@@ -317,8 +334,8 @@ func readOutputs(r io.Reader, outputCount int) ([]model.Output, error) {
 
 const blockHeaderLength = 112
 
-func readHeader(r io.Reader) (*model.Header, error) {
-	header := &model.Header{}
+func readHeader(r io.Reader) (*Header, error) {
+	header := &Header{}
 
 	headerBytes, err := read(r, blockHeaderLength)
 	if err != nil {
