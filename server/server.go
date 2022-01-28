@@ -2,12 +2,13 @@ package server
 
 import (
 	"encoding/json"
-	"fast-blocks/storage"
+	"net/http"
+
+	"github.com/OdyseeTeam/fast-blocks/storage"
+	"github.com/cockroachdb/errors"
 	"github.com/genjidb/genji/document"
 	"github.com/genjidb/genji/types"
-	"github.com/lbryio/lbry.go/v2/extras/errors"
 	"github.com/sirupsen/logrus"
-	"net/http"
 )
 
 func Start() {
@@ -36,7 +37,7 @@ func query() http.Handler {
 			var m map[string]interface{}
 			err = document.MapScan(d, &m)
 			if err != nil {
-				return errors.Err(err)
+				return errors.WithStack(err)
 			}
 			results = append(results, m)
 			return nil

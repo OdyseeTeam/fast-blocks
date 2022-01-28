@@ -1,3 +1,5 @@
 /initial-blocks/
 /bin/
 /blocks/
+*.csv
+*.zip
