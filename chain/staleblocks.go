@@ -1,4 +1,4 @@
-package blockchain
+package chain
 
 import (
 	"github.com/lbryio/lbcd/chaincfg/chainhash"
@@ -20,7 +20,7 @@ func GetStaleBlockHashes() ([]string, error) {
 		return nil, err
 	}
 
-	logrus.Printf("got %d chain tips", len(tips))
+	logrus.Printf("got %d blockReader tips", len(tips))
 
 	for _, tip := range tips {
 		if tip.Status != "valid-headers" || tip.BranchLen > 1000 {
@@ -59,7 +59,7 @@ func GetStaleBlockHashes() ([]string, error) {
 	return staleHashes, err
 }
 
-var StaleBlockHashes = map[string]struct{}{
+var staleBlockHashes = map[string]struct{}{
 	"9b54503398f86d9fd95e1268620d49639f78dcc59f6edf264321585a804266b2": {},
 	"4e8055339d313c97d168e44ad8d0404d575a399349b670bf12885c9c7054cc49": {},
 	"c152a484c2283afa37df6eede6de0667834ca10858103a8656d54cffd8bfbd70": {},

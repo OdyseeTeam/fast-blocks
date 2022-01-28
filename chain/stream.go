@@ -1,4 +1,4 @@
-package blockchain
+package chain
 
 import (
 	"bytes"
@@ -94,7 +94,7 @@ func (bf *BlockFile) NextBlock() (*Block, error) {
 
 	// TODO: this is wrong. the blocks are not stored in order in the file
 	// use the leveldb index if you want to read the blocks in order
-	// see chain.blockFilesOrderedByHeight() for a starting point
+	// see blockReader.blockFilesOrderedByHeight() for a starting point
 	block.Height = bf.currHeight
 	bf.currHeight++
 

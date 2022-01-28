@@ -1,4 +1,4 @@
-package blockchain
+package chain
 
 import (
 	"encoding/hex"
@@ -43,6 +43,11 @@ type Block struct {
 }
 
 func (b Block) String() string { return "" }
+
+func (b Block) IsStale() bool {
+	_, ok := staleBlockHashes[b.Header.BlockHash.String()]
+	return ok
+}
 
 type Input struct {
 	PrevTxHash  *chainhash.Hash

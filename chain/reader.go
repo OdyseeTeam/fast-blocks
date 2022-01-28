@@ -1,4 +1,4 @@
-package blockchain
+package chain
 
 import (
 	"encoding/binary"
@@ -15,30 +15,28 @@ import (
 	"github.com/syndtr/goleveldb/leveldb/util"
 )
 
-type Chain struct {
-	Workers int
+type blockReader struct {
+	Workers   int // how many parallel threads to use to read block files
+	MaxHeight int // stop loading blocks at this height. 0 = no limit
 
 	blockFilesMu sync.Mutex
 	blockFiles   []*BlockFile
 	onBlockFn    func(block Block)
 }
 
-func New(dir string) (*Chain, error) {
-	chain := &Chain{Workers: 1}
-	err := chain.loadBlockFiles(dir)
+func NewReader(dir string) (*blockReader, error) {
+	blockFiles, err := blockFilesOrderedByHeight(dir)
 	if err != nil {
 		return nil, err
 	}
-	return chain, nil
+
+	return &blockReader{
+		Workers:    1,
+		blockFiles: blockFiles,
+	}, nil
 }
 
-func (c *Chain) loadBlockFiles(dir string) error {
-	var err error
-	c.blockFiles, err = blockFilesOrderedByHeight(dir)
-	return err
-}
-
-func (c *Chain) nextBlockFile() (*BlockFile, error) {
+func (c *blockReader) nextBlockFile() (*BlockFile, error) {
 	if len(c.blockFiles) == 0 {
 		return nil, nil
 	}
@@ -51,18 +49,18 @@ func (c *Chain) nextBlockFile() (*BlockFile, error) {
 	return next, nil
 }
 
-func (c *Chain) OnBlock(fn func(Block)) {
+func (c *blockReader) OnBlock(fn func(Block)) {
 	c.onBlockFn = fn
 }
 
-func (c *Chain) notify(block Block) {
+func (c *blockReader) notify(block Block) {
 	if c.onBlockFn != nil {
 		c.onBlockFn(block)
 	}
 }
 
-//Go reads the block data and passes it to the appropriate on* functions
-func (c *Chain) Go(maxHeight int) error {
+//Load reads the block data and passes it to the appropriate on* functions
+func (c *blockReader) Load() error {
 	fileChan := make(chan *BlockFile)
 
 	if c.Workers < 1 {
@@ -89,7 +87,7 @@ func (c *Chain) Go(maxHeight int) error {
 			break
 		}
 
-		if maxHeight > 0 && blockFile.firstHeight > uint64(maxHeight) {
+		if c.MaxHeight > 0 && blockFile.firstHeight > uint64(c.MaxHeight) {
 			continue
 		}
 
@@ -101,7 +99,7 @@ func (c *Chain) Go(maxHeight int) error {
 	return nil
 }
 
-func (c *Chain) worker(workerNum int, blockFileChan chan *BlockFile) {
+func (c *blockReader) worker(workerNum int, blockFileChan chan *BlockFile) {
 	for bf := range blockFileChan {
 		//logrus.Infof("worker %d starting block file %s", workerNum, bf.filename)
 		blockCount := bf.firstHeight // TODO: blocks are not actually in order but this is close enough

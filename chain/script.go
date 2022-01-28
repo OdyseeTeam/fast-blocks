@@ -1,4 +1,4 @@
-package blockchain
+package chain
 
 import (
 	"github.com/cockroachdb/errors"

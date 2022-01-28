@@ -6,7 +6,7 @@ import (
 	"os"
 	"sync"
 
-	"github.com/OdyseeTeam/fast-blocks/blockchain"
+	"github.com/OdyseeTeam/fast-blocks/chain"
 	"github.com/lbryio/lbcd/chaincfg/chainhash"
 	"github.com/lbryio/lbcd/txscript"
 	"github.com/lbryio/lbcutil"
@@ -43,7 +43,7 @@ func BalanceSnapshots(maxHeight int) {
 		1090000: {},
 	}
 
-	chain, err := blockchain.New("/home/grin/.lbrycrd-17.3.3/blocks/")
+	c, err := chain.NewReader("/home/grin/.lbrycrd-17.3.3/blocks/")
 	if err != nil {
 		logrus.Fatalf("%+v", err)
 	}
@@ -56,8 +56,8 @@ func BalanceSnapshots(maxHeight int) {
 		wg.Done()
 	}()
 
-	chain.OnBlock(func(block blockchain.Block) {
-		if _, ok := blockchain.StaleBlockHashes[block.Header.BlockHash.String()]; ok {
+	c.OnBlock(func(block chain.Block) {
+		if block.IsStale() {
 			return
 		}
 
@@ -95,7 +95,7 @@ func BalanceSnapshots(maxHeight int) {
 		}
 	})
 
-	err = chain.Go(maxHeight)
+	err = c.Load()
 	if err != nil {
 		logrus.Errorf("%+v", err)
 	}
